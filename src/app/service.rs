@@ -3,9 +3,9 @@ use std::path::Path;
 
 use anyhow::{Result, bail};
 
-use crate::conflict::has_external_adhoc_conflict;
-use crate::cpulimit::CpulimitExecutor;
-use crate::launchd::LaunchdManager;
+use crate::app::conflict::has_external_adhoc_conflict;
+use crate::infra::cpulimit::CpulimitExecutor;
+use crate::infra::launchd::LaunchdManager;
 use crate::model::{Domain, ManagedMode, ManagedTarget, Rule};
 use crate::store;
 
@@ -128,8 +128,8 @@ mod tests {
 
     use tempfile::tempdir;
 
-    use crate::cpulimit::CpulimitExecutor;
-    use crate::launchd::LaunchdManager;
+    use crate::infra::cpulimit::CpulimitExecutor;
+    use crate::infra::launchd::LaunchdManager;
     use crate::model::Domain;
 
     use super::Service;
@@ -186,7 +186,7 @@ mod tests {
                 domain,
                 cpulimit_bin.to_string(),
             ));
-            Ok(format!("com.cpulimit-top.{name}"))
+            Ok(format!("com.cpuguard.{name}"))
         }
 
         fn remove_watch(&self, name: &str, domain: Domain) -> anyhow::Result<()> {

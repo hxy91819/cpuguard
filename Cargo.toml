@@ -1,7 +1,14 @@
 [package]
-name = "cpulimit-top"
+name = "cpuguard"
 version = "0.1.0"
 edition = "2024"
+
+[lib]
+name = "cpuguard"
+
+[[bin]]
+name = "cpuguard"
+path = "src/main.rs"
 
 [dependencies]
 anyhow = "1"

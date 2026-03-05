@@ -23,7 +23,7 @@ fn top_once_uses_mock_cpulimit_and_records_state() {
         .expect("chmod mock");
 
     let target_pid = std::process::id();
-    let output = Command::new(env!("CARGO_BIN_EXE_cpulimit-top"))
+    let output = Command::new(env!("CARGO_BIN_EXE_cpuguard"))
         .args([
             "top",
             "--once",
@@ -84,7 +84,7 @@ fn top_default_creates_watch_rule() {
         .spawn()
         .expect("spawn sleep");
     let target_pid = sleeper.id();
-    let output = Command::new(env!("CARGO_BIN_EXE_cpulimit-top"))
+    let output = Command::new(env!("CARGO_BIN_EXE_cpuguard"))
         .args(["top", "--pid", &target_pid.to_string(), "--limit", "33"])
         .env("CPULIMIT_TOP_CONFIG_DIR", &cfg_dir)
         .env("CPULIMIT_TOP_CPULIMIT_BIN", &mock_bin)
@@ -124,7 +124,7 @@ updated_at = "2026-03-05T11:00:00+08:00"
     )
     .expect("write rules");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_cpulimit-top"))
+    let output = Command::new(env!("CARGO_BIN_EXE_cpuguard"))
         .arg("watches")
         .env("CPULIMIT_TOP_CONFIG_DIR", &cfg_dir)
         .env("CPULIMIT_TOP_DISABLE_LAUNCHD", "1")
@@ -170,7 +170,7 @@ fn status_shows_table_and_running_state() {
     )
     .expect("write state");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_cpulimit-top"))
+    let output = Command::new(env!("CARGO_BIN_EXE_cpuguard"))
         .arg("status")
         .env("CPULIMIT_TOP_CONFIG_DIR", &cfg_dir)
         .output()
@@ -223,7 +223,7 @@ updated_at = "2026-03-05T11:00:00+08:00"
     let old_path = std::env::var("PATH").unwrap_or_default();
     let path = format!("{}:{}", bin_dir.display(), old_path);
 
-    let output = Command::new(env!("CARGO_BIN_EXE_cpulimit-top"))
+    let output = Command::new(env!("CARGO_BIN_EXE_cpuguard"))
         .arg("watches")
         .env("CPULIMIT_TOP_CONFIG_DIR", &cfg_dir)
         .env("PATH", path)

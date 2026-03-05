@@ -1,6 +1,6 @@
-# cpulimit-top
+# cpuguard
 
-`cpulimit-top` 是一个基于 Rust 的 macOS CPU 限速管理工具。
+`cpuguard` 是一个基于 Rust 的 macOS CPU 限速管理工具。
 它不重写 `cpulimit` 算法，而是在其上构建：规则管理、进程选择、`launchd` 托管、实例状态追踪与安全清理。
 
 ## 设计目标
@@ -52,7 +52,7 @@
 brew install cpulimit
 
 # 2) 进入仓库
-cd /Users/masonxhuang/Documents/code/cpulimit-top
+cd /Users/masonxhuang/Documents/code/cpuguard
 
 # 3) 质量检查
 cargo fmt --all -- --check
@@ -66,7 +66,7 @@ cargo test --all
 cargo build --release
 
 # 查看帮助
-./target/release/cpulimit-top --help
+./target/release/cpuguard --help
 ```
 
 ## 发布与安装（二进制）
@@ -75,11 +75,11 @@ cargo build --release
 cargo build --release
 
 # 2) 安装到 /usr/local/bin（推荐）
-sudo install -m 755 ./target/release/cpulimit-top /usr/local/bin/cpulimit-top
+sudo install -m 755 ./target/release/cpuguard /usr/local/bin/cpuguard
 
 # 3) 验证
-which cpulimit-top
-cpulimit-top --help
+which cpuguard
+cpuguard --help
 ```
 
 说明：
@@ -88,7 +88,7 @@ cpulimit-top --help
 
 ### 1) 从 top 视图选择并默认加入 watch（推荐）
 ```bash
-./target/release/cpulimit-top top --count 10 --limit 20
+./target/release/cpuguard top --count 10 --limit 20
 ```
 - 默认行为：选择目标后会创建/更新 watch 规则（持久化）。
 - top 视图默认每 5 秒自动刷新一次，可用 `--refresh` 调整刷新间隔（秒）。
@@ -96,38 +96,38 @@ cpulimit-top --help
 
 ### 2) 一次性限制（不持久化）
 ```bash
-./target/release/cpulimit-top top --once --pid 12345 --limit 30
+./target/release/cpuguard top --once --pid 12345 --limit 30
 ```
 - `--once` 才会创建 ad-hoc 实例，不写入 `rules.toml`。
 
 ### 3) 直接管理 watch 规则
 ```bash
 # 新增/更新规则
-./target/release/cpulimit-top watch ztsmedr --limit 25
+./target/release/cpuguard watch ztsmedr --limit 25
 
 # 查看规则状态（含 launchd 与目标进程状态）
-./target/release/cpulimit-top watches
+./target/release/cpuguard watches
 
 # 删除规则
-./target/release/cpulimit-top unwatch ztsmedr
+./target/release/cpuguard unwatch ztsmedr
 ```
 
 ### 4) 查看托管实例状态与清理
 ```bash
 # 查看托管实例（running/stale）
-./target/release/cpulimit-top status
+./target/release/cpuguard status
 
 # 仅清理本工具托管实例
-./target/release/cpulimit-top clean --yes
+./target/release/cpuguard clean --yes
 ```
 
 ### 5) 域切换（默认 user）
 ```bash
 # 用户域（默认）
-./target/release/cpulimit-top --domain user watches
+./target/release/cpuguard --domain user watches
 
 # 系统域（通常需要更高权限）
-./target/release/cpulimit-top --domain system watch myproc --limit 20
+./target/release/cpuguard --domain system watch myproc --limit 20
 ```
 
 ## 运行流程概览

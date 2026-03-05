@@ -6,7 +6,7 @@
 - 每次交付必须包含三项：改了什么、为什么这么改、如何验证。
 
 ## Project Scope
-- 项目名称：`cpulimit-top`。
+- 项目名称：`cpuguard`。
 - 目标：用 Rust 实现 CPU 限速管理层，底层执行器使用外部 `cpulimit`。
 - 平台：V1 仅支持 macOS。
 - 默认运行域：`launchd` 用户域（`LaunchAgents`）。
@@ -32,6 +32,19 @@
 - 使用 Rust 实现业务逻辑，不重写 CPU 节流算法。
 - 执行器固定为外部 `cpulimit`（通过命令调用）。
 - 仅当用户显式指定 `--domain system` 时才允许系统域操作。
+
+## Project Structure
+- 目录结构（Rust）：
+  - `src/main.rs`: CLI 入口与命令路由。
+  - `src/app/`: 业务编排层（如 `service`、冲突检测）。
+  - `src/infra/`: 外部系统适配层（`cpulimit`、`launchd`、进程采样、运行时探测、配置）。
+  - `src/store/`: 持久化读写（rules/state）。
+  - `src/model/`: 领域模型与类型定义。
+  - `src/cli/`: 终端展示相关逻辑（表格格式化等）。
+- 新代码放置原则：
+  - 外部命令调用优先放到 `infra/`，避免散落在 `main.rs` 或 `app/`。
+  - 纯业务规则放 `app/`，不要直接依赖具体命令行实现细节。
+  - 数据结构变更先改 `model/`，再同步 `store/` 与文档。
 
 ## Documentation Consistency
 - 新增或修改 CLI 参数、配置字段、状态字段时，必须同步更新：

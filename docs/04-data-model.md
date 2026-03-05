@@ -1,8 +1,8 @@
 # 04 Data Model
 
 ## 1. 文件位置
-- 规则文件：`~/.config/cpulimit-top/rules.toml`
-- 实例状态：`~/.config/cpulimit-top/state.json`
+- 规则文件：`~/.config/cpuguard/rules.toml`
+- 实例状态：`~/.config/cpuguard/state.json`
 
 ## 2. Rule
 ```rust

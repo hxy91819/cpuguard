@@ -3,7 +3,7 @@ use std::process::Command;
 
 use anyhow::Result;
 
-use crate::process_snapshot::process_name;
+use crate::infra::process_snapshot::process_name;
 
 pub fn has_external_adhoc_conflict(
     target_name: &str,

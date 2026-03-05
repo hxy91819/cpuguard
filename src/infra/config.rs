@@ -16,7 +16,7 @@ impl AppConfig {
         let home = env::var("HOME").unwrap_or_else(|_| ".".to_string());
         let config_dir = env::var("CPULIMIT_TOP_CONFIG_DIR")
             .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from(format!("{home}/.config/cpulimit-top")));
+            .unwrap_or_else(|_| PathBuf::from(format!("{home}/.config/cpuguard")));
         let launch_agents_dir = env::var("CPULIMIT_TOP_LAUNCH_AGENTS_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|_| PathBuf::from(format!("{home}/Library/LaunchAgents")));
@@ -34,7 +34,7 @@ impl AppConfig {
             state_file,
             launch_agents_dir,
             cpulimit_bin,
-            label_prefix: "com.cpulimit-top".to_string(),
+            label_prefix: "com.cpuguard".to_string(),
         }
     }
 }

@@ -5,17 +5,18 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-use cpulimit_top::config::AppConfig;
-use cpulimit_top::cpulimit::RealCpulimitExecutor;
-use cpulimit_top::launchd::{RealLaunchdManager, watch_loaded_status};
-use cpulimit_top::model::{Domain, ManagedTarget};
-use cpulimit_top::process_snapshot::{process_name, top_processes};
-use cpulimit_top::runtime::{first_pid_by_name, process_alive};
-use cpulimit_top::service::Service;
-use cpulimit_top::store;
+use cpuguard::app::service::Service;
+use cpuguard::cli::output::fit_col;
+use cpuguard::infra::config::AppConfig;
+use cpuguard::infra::cpulimit::RealCpulimitExecutor;
+use cpuguard::infra::launchd::{RealLaunchdManager, watch_loaded_status};
+use cpuguard::infra::process_snapshot::{process_name, top_processes};
+use cpuguard::infra::runtime::{first_pid_by_name, process_alive};
+use cpuguard::model::{Domain, ManagedTarget};
+use cpuguard::store;
 
 #[derive(Parser, Debug)]
-#[command(version, about = "cpulimit-top: macOS cpulimit manager")]
+#[command(version, about = "cpuguard: macOS cpulimit manager")]
 struct Cli {
     #[arg(long, default_value = "user")]
     domain: DomainArg,
@@ -254,25 +255,6 @@ fn validate_limit(limit: u16) -> Result<()> {
     Ok(())
 }
 
-fn fit_col(input: &str, width: usize) -> String {
-    let len = input.chars().count();
-    if len == width {
-        return input.to_string();
-    }
-    if len < width {
-        return format!("{input:<width$}");
-    }
-    if width <= 3 {
-        return ".".repeat(width);
-    }
-    let mut out = String::with_capacity(width);
-    for ch in input.chars().take(width - 3) {
-        out.push(ch);
-    }
-    out.push_str("...");
-    out
-}
-
 fn pick_pid_from_live_top(count: usize, refresh_secs: u64) -> Result<Option<u32>> {
     let (tx, rx) = mpsc::channel::<String>();
     thread::spawn(move || {
@@ -297,11 +279,10 @@ fn pick_pid_from_live_top(count: usize, refresh_secs: u64) -> Result<Option<u32>
 
         print!("\x1B[2J\x1B[H");
         println!(
-            "{}  {}  {}  {}",
+            "{}  {}  {}  NAME",
             fit_col("#", 4),
             fit_col("PID", 8),
-            fit_col("CPU", 7),
-            "NAME"
+            fit_col("CPU", 7)
         );
         for (idx, p) in list.iter().enumerate() {
             println!(

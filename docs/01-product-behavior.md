@@ -37,7 +37,7 @@
 ## 4. 命令路由图
 ```mermaid
 flowchart TD
-    A[cpulimit-top] --> B{subcommand}
+    A[cpuguard] --> B{subcommand}
     B -->|watch| C[Validate Input]
     B -->|unwatch| D[Rule Removal]
     B -->|watches| E[Read Rule Store]

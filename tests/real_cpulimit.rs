@@ -13,15 +13,13 @@ fn detect_cpulimit() -> Option<PathBuf> {
         "cpulimit",
     ];
     for c in candidates {
-        let out = Command::new(c)
-            .arg("--help")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-        if let Ok(status) = out
-            && status.success()
-        {
-            return Some(PathBuf::from(c));
+        let out = Command::new(c).arg("--help").output();
+        if let Ok(output) = out {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if stdout.contains("Usage: cpulimit") || stderr.contains("Usage: cpulimit") {
+                return Some(PathBuf::from(c));
+            }
         }
     }
     None
@@ -44,7 +42,7 @@ fn integration_real_cpulimit_once() {
     let cfg_dir = dir.path().join("cfg");
     fs::create_dir_all(&cfg_dir).expect("create cfg dir");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_cpulimit-top"))
+    let output = Command::new(env!("CARGO_BIN_EXE_cpuguard"))
         .args([
             "top",
             "--once",
