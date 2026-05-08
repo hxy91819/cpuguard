@@ -14,6 +14,11 @@ pub struct Service<E: CpulimitExecutor, L: LaunchdManager> {
     pub launchd: L,
 }
 
+pub struct WatchRuntime<'a> {
+    pub cpuguard_bin: &'a str,
+    pub cpulimit_bin: &'a str,
+}
+
 impl<E: CpulimitExecutor, L: LaunchdManager> Service<E, L> {
     pub fn watch(
         &self,
@@ -22,7 +27,7 @@ impl<E: CpulimitExecutor, L: LaunchdManager> Service<E, L> {
         name: &str,
         limit: u16,
         domain: Domain,
-        cpulimit_bin: &str,
+        runtime: WatchRuntime<'_>,
     ) -> Result<Rule> {
         self.executor.ensure_available()?;
         let state = store::load_state(state_file)?;
@@ -50,9 +55,13 @@ impl<E: CpulimitExecutor, L: LaunchdManager> Service<E, L> {
 
         let _ = self.launchd.remove_watch(name, domain);
         let rule = store::upsert_rule(rules_file, name, limit, domain)?;
-        let _label = self
-            .launchd
-            .ensure_watch(name, limit, domain, cpulimit_bin)?;
+        let _label = self.launchd.ensure_watch(
+            name,
+            limit,
+            domain,
+            runtime.cpuguard_bin,
+            runtime.cpulimit_bin,
+        )?;
         Ok(rule)
     }
 
@@ -87,13 +96,19 @@ impl<E: CpulimitExecutor, L: LaunchdManager> Service<E, L> {
         Ok(stopped)
     }
 
-    pub fn clean_all(&self, rules_file: &Path, state_file: &Path) -> Result<(usize, usize)> {
+    pub fn clean_all(
+        &self,
+        rules_file: &Path,
+        state_file: &Path,
+        domain: Domain,
+    ) -> Result<(usize, usize)> {
         let rules = store::load_rules(rules_file)?;
         let mut removed_rules = 0usize;
         for r in rules.rules {
             let _ = self.launchd.remove_watch(&r.name, r.domain);
             removed_rules += 1;
         }
+        removed_rules += self.launchd.clean_managed_watches(domain)?;
         store::save_rules(rules_file, &crate::model::RulesFile::default())?;
         let stopped = self.clean_managed_only(state_file)?;
         Ok((removed_rules, stopped))
@@ -132,7 +147,7 @@ mod tests {
     use crate::infra::launchd::LaunchdManager;
     use crate::model::Domain;
 
-    use super::Service;
+    use super::{Service, WatchRuntime};
 
     #[derive(Default)]
     struct FakeExecutor {
@@ -160,6 +175,11 @@ mod tests {
             Ok(self.next_pid.borrow_mut().pop_front().unwrap_or(9999))
         }
 
+        fn run_for_target(&self, target_pid: u32, limit: u16) -> anyhow::Result<()> {
+            self.started.borrow_mut().push((target_pid, limit));
+            Ok(())
+        }
+
         fn stop_instance(&self, cpulimit_pid: u32) -> anyhow::Result<()> {
             self.stopped.borrow_mut().push(cpulimit_pid);
             Ok(())
@@ -178,13 +198,14 @@ mod tests {
             name: &str,
             limit: u16,
             domain: Domain,
+            cpuguard_bin: &str,
             cpulimit_bin: &str,
         ) -> anyhow::Result<String> {
             self.ensured.borrow_mut().push((
                 name.to_string(),
                 limit,
                 domain,
-                cpulimit_bin.to_string(),
+                format!("{cpuguard_bin}:{cpulimit_bin}"),
             ));
             Ok(format!("com.cpuguard.{name}"))
         }
@@ -192,6 +213,13 @@ mod tests {
         fn remove_watch(&self, name: &str, domain: Domain) -> anyhow::Result<()> {
             self.removed.borrow_mut().push((name.to_string(), domain));
             Ok(())
+        }
+
+        fn clean_managed_watches(&self, domain: Domain) -> anyhow::Result<usize> {
+            self.removed
+                .borrow_mut()
+                .push(("*managed*".to_string(), domain));
+            Ok(0)
         }
     }
 
@@ -231,7 +259,10 @@ mod tests {
                 "demo-proc",
                 20,
                 Domain::User,
-                "/mock/cpulimit",
+                WatchRuntime {
+                    cpuguard_bin: "/mock/cpuguard",
+                    cpulimit_bin: "/mock/cpulimit",
+                },
             )
             .expect("watch should succeed");
 
@@ -256,7 +287,7 @@ mod tests {
         let service = Service { executor, launchd };
 
         let (rules_removed, instances_stopped) = service
-            .clean_all(&rules_file, &state_file)
+            .clean_all(&rules_file, &state_file, Domain::User)
             .expect("clean all");
         assert_eq!(rules_removed, 1);
         assert_eq!(instances_stopped, 1);

@@ -1,6 +1,6 @@
 use std::process::Command;
 
-use anyhow::Result;
+use anyhow::{Context, Result, bail};
 
 pub fn process_alive(pid: u32) -> bool {
     Command::new("kill")
@@ -21,4 +21,16 @@ pub fn first_pid_by_name(name: &str) -> Result<Option<u32>> {
         .next()
         .and_then(|line| line.trim().parse::<u32>().ok());
     Ok(pid)
+}
+
+/// 向指定 PID 发送 SIGTERM 信号终止进程。
+pub fn kill_process(pid: u32) -> Result<()> {
+    let status = Command::new("kill")
+        .args(["-TERM", &pid.to_string()])
+        .status()
+        .context("failed to send SIGTERM")?;
+    if !status.success() {
+        bail!("kill -TERM {} failed", pid);
+    }
+    Ok(())
 }

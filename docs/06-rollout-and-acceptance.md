@@ -12,6 +12,7 @@
 - 正确：`top` 默认创建 watch，`top --once` 才是一次性限速。
 - 健壮：依赖缺失、权限不足、launchd 失败都有明确退出码。
 - 性能：`top/status` 单次采样，避免重复全量扫描。
+- 健壮：重启恢复不得生成等待中的 `cpulimit -e` 常驻进程。
 
 ## 3. 测试矩阵
 | 类别 | 用例 | 期望 |
@@ -20,9 +21,12 @@
 | 正确 | `watch` 同名更新 | 规则被覆盖且仅一个条目 |
 | 正确 | `top` 默认路径 | 选择进程后生成/更新 watch 规则 |
 | 正确 | `top --once` 路径 | 不写 `rules.toml`，仅登记 ad-hoc 实例 |
+| 正确 | `top` 批量终止同名异常进程 | 仅终止当前快照中 NAME 完全相同的非系统进程，并要求确认 |
 | 正确 | `unwatch` 不存在规则 | 幂等返回，不破坏其他规则 |
 | 健壮 | `watch` 前存在托管 ad-hoc 冲突 | 自动停止冲突实例并继续 |
 | 健壮 | `watch` 前存在外部 ad-hoc 冲突 | 退出码 6，返回冲突提示 |
+| 健壮 | 重启恢复 watch 规则 | launchd 托管 `cpuguard` runner，不出现等待中的 `cpulimit -e` 常驻进程 |
+| 健壮 | `clean --yes` 遇到旧版 `com.cpuguard.*` plist | 仅清理受控 label 对应的 legacy plist，不影响外部 `cpulimit` |
 | 健壮 | 移除 `cpulimit` 后运行命令 | 退出码 3，给安装提示 |
 | 健壮 | `--domain system` 无权限 | 退出码 4，给提权建议 |
 | 性能 | 200+ 进程执行 `status` | 单次刷新，响应在阈值内 |
