@@ -9,15 +9,14 @@ use anyhow::{Context, Result, anyhow};
 use crate::model::Domain;
 
 pub trait LaunchdManager {
-    fn ensure_watch(
+    fn ensure_agent(
         &self,
-        name: &str,
-        limit: u16,
         domain: Domain,
         cpuguard_bin: &str,
         cpulimit_bin: &str,
+        config_dir: &str,
     ) -> Result<String>;
-    fn remove_watch(&self, name: &str, domain: Domain) -> Result<()>;
+    fn remove_agent(&self, domain: Domain) -> Result<()>;
     fn clean_managed_watches(&self, domain: Domain) -> Result<usize>;
 }
 
@@ -28,18 +27,19 @@ pub struct RealLaunchdManager {
 }
 
 impl RealLaunchdManager {
-    fn label(&self, name: &str) -> String {
-        watch_label(&self.label_prefix, name)
+    pub fn agent_label(&self) -> String {
+        format!("{}.agent", self.label_prefix)
     }
 
-    fn plist_path(&self, name: &str, domain: Domain) -> PathBuf {
+    fn agent_plist_path(&self, domain: Domain) -> PathBuf {
         match domain {
             Domain::User => self
                 .launch_agents_dir
-                .join(format!("{}.plist", self.label(name))),
-            Domain::System => {
-                PathBuf::from(format!("/Library/LaunchDaemons/{}.plist", self.label(name)))
-            }
+                .join(format!("{}.plist", self.agent_label())),
+            Domain::System => PathBuf::from(format!(
+                "/Library/LaunchDaemons/{}.plist",
+                self.agent_label()
+            )),
         }
     }
 
@@ -50,7 +50,7 @@ impl RealLaunchdManager {
         }
     }
 
-    fn bootout_label(&self, label: &str, domain: Domain) -> Result<()> {
+    fn bootout_label_strict(&self, label: &str, domain: Domain) -> Result<()> {
         if env::var("CPULIMIT_TOP_DISABLE_LAUNCHD").ok().as_deref() == Some("1") {
             return Ok(());
         }
@@ -65,9 +65,44 @@ impl RealLaunchdManager {
                 cmd.args(["bootout", &format!("system/{label}")]);
             }
         }
-        cmd.stdout(Stdio::null()).stderr(Stdio::null());
-        let _ = cmd.status();
+        let status = cmd
+            .status()
+            .context("launchctl bootout failed to execute")?;
+        if !status.success() {
+            return Err(anyhow!("launchctl bootout failed for {label}"));
+        }
         Ok(())
+    }
+
+    fn bootout_label_allow_missing(&self, label: &str, domain: Domain) -> Result<()> {
+        if env::var("CPULIMIT_TOP_DISABLE_LAUNCHD").ok().as_deref() == Some("1") {
+            return Ok(());
+        }
+
+        let mut cmd = Command::new("launchctl");
+        match domain {
+            Domain::User => {
+                let uid = unsafe { libc::geteuid() };
+                cmd.args(["bootout", &format!("gui/{uid}/{label}")]);
+            }
+            Domain::System => {
+                cmd.args(["bootout", &format!("system/{label}")]);
+            }
+        }
+        let output = cmd
+            .output()
+            .context("launchctl bootout failed to execute")?;
+        if output.status.success() {
+            return Ok(());
+        }
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if stderr.contains("No such process")
+            || stderr.contains("Could not find service")
+            || stderr.contains("does not exist")
+        {
+            return Ok(());
+        }
+        Err(anyhow!("launchctl bootout failed for {label}: {stderr}"))
     }
 
     fn managed_label_from_plist(&self, path: &std::path::Path) -> Option<String> {
@@ -83,39 +118,28 @@ impl RealLaunchdManager {
         &self,
         path: &PathBuf,
         label: &str,
-        name: &str,
-        limit: u16,
         cpuguard_bin: &str,
         cpulimit_bin: &str,
+        config_dir: &str,
+        domain: Domain,
     ) -> Result<()> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)
                 .with_context(|| format!("create dir {}", parent.display()))?;
         }
         let content = format!(
-            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n  <key>Label</key><string>{label}</string>\n  <key>ProgramArguments</key>\n  <array>\n    <string>{cpuguard_bin}</string>\n    <string>__watch-runner</string>\n    <string>--name</string><string>{name}</string>\n    <string>--limit</string><string>{limit}</string>\n    <string>--cpulimit-bin</string><string>{cpulimit_bin}</string>\n  </array>\n  <key>RunAtLoad</key><true/>\n  <key>KeepAlive</key><true/>\n  <key>ThrottleInterval</key><integer>10</integer>\n</dict>\n</plist>\n"
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n  <key>Label</key><string>{label}</string>\n  <key>ProgramArguments</key>\n  <array>\n    <string>{cpuguard_bin}</string>\n    <string>--domain</string><string>{domain}</string>\n    <string>__agent</string>\n    <string>--config-dir</string><string>{config_dir}</string>\n    <string>--cpulimit-bin</string><string>{cpulimit_bin}</string>\n  </array>\n  <key>RunAtLoad</key><true/>\n  <key>KeepAlive</key><true/>\n  <key>ThrottleInterval</key><integer>30</integer>\n</dict>\n</plist>\n"
         );
-        fs::write(path, content).with_context(|| format!("write plist {}", path.display()))?;
+        let tmp = path.with_extension("plist.tmp");
+        fs::write(&tmp, content).with_context(|| format!("write plist {}", tmp.display()))?;
+        fs::rename(&tmp, path)
+            .with_context(|| format!("rename {} -> {}", tmp.display(), path.display()))?;
         Ok(())
     }
-}
 
-impl LaunchdManager for RealLaunchdManager {
-    fn ensure_watch(
-        &self,
-        name: &str,
-        limit: u16,
-        domain: Domain,
-        cpuguard_bin: &str,
-        cpulimit_bin: &str,
-    ) -> Result<String> {
-        let label = self.label(name);
-        let plist = self.plist_path(name, domain);
-        self.remove_watch(name, domain)?;
-        self.write_plist(&plist, &label, name, limit, cpuguard_bin, cpulimit_bin)?;
-
+    fn bootstrap_agent(&self, domain: Domain, plist: &std::path::Path) -> Result<()> {
         if env::var("CPULIMIT_TOP_DISABLE_LAUNCHD").ok().as_deref() == Some("1") {
-            return Ok(label);
+            return Ok(());
         }
 
         let mut cmd = Command::new("launchctl");
@@ -136,19 +160,76 @@ impl LaunchdManager for RealLaunchdManager {
             .status()
             .context("launchctl bootstrap failed to execute")?;
         if !status.success() {
-            return Err(anyhow!("launchctl bootstrap failed for {}", label));
+            return Err(anyhow!("launchctl bootstrap failed"));
         }
+        Ok(())
+    }
+
+    fn restore_plist(path: &std::path::Path, previous: Option<&[u8]>) -> Result<()> {
+        match previous {
+            Some(bytes) => fs::write(path, bytes)
+                .with_context(|| format!("restore plist {}", path.display()))?,
+            None if path.exists() => {
+                fs::remove_file(path)
+                    .with_context(|| format!("remove failed plist {}", path.display()))?;
+            }
+            None => {}
+        }
+        Ok(())
+    }
+}
+
+impl LaunchdManager for RealLaunchdManager {
+    fn ensure_agent(
+        &self,
+        domain: Domain,
+        cpuguard_bin: &str,
+        cpulimit_bin: &str,
+        config_dir: &str,
+    ) -> Result<String> {
+        let label = self.agent_label();
+        let plist = self.agent_plist_path(domain);
+        let was_loaded = agent_loaded_status(&self.label_prefix, domain) == Some(true);
+        let previous_plist = fs::read(&plist).ok();
+        self.write_plist(
+            &plist,
+            &label,
+            cpuguard_bin,
+            cpulimit_bin,
+            config_dir,
+            domain,
+        )?;
+
+        if env::var("CPULIMIT_TOP_DISABLE_LAUNCHD").ok().as_deref() == Some("1") {
+            return Ok(label);
+        }
+        if was_loaded && let Err(err) = self.bootout_label_strict(&label, domain) {
+            let _ = Self::restore_plist(&plist, previous_plist.as_deref());
+            return Err(err.context(format!("refresh launchd agent {label}")));
+        }
+        if let Err(err) = self.bootstrap_agent(domain, &plist) {
+            let _ = Self::restore_plist(&plist, previous_plist.as_deref());
+            if was_loaded {
+                let _ = self.bootstrap_agent(domain, &plist);
+            }
+            return Err(err.context(format!("refresh launchd agent {label}")));
+        }
+
+        let _ = self.clean_managed_watches(domain);
         Ok(label)
     }
 
-    fn remove_watch(&self, name: &str, domain: Domain) -> Result<()> {
-        let label = self.label(name);
-        let plist = self.plist_path(name, domain);
-
-        self.bootout_label(&label, domain)?;
+    fn remove_agent(&self, domain: Domain) -> Result<()> {
+        let label = self.agent_label();
+        let plist = self.agent_plist_path(domain);
+        let previous_plist = fs::read(&plist).ok();
 
         if plist.exists() {
             fs::remove_file(&plist).with_context(|| format!("remove {}", plist.display()))?;
+        }
+        if let Err(err) = self.bootout_label_allow_missing(&label, domain) {
+            let _ = Self::restore_plist(&plist, previous_plist.as_deref());
+            return Err(err.context(format!("remove launchd agent {label}")));
         }
         Ok(())
     }
@@ -168,7 +249,12 @@ impl LaunchdManager for RealLaunchdManager {
             let Some(label) = self.managed_label_from_plist(&path) else {
                 continue;
             };
-            self.bootout_label(&label, domain)?;
+            if label == self.agent_label() {
+                continue;
+            }
+            if label_loaded_status(&label, domain) == Some(true) {
+                self.bootout_label_strict(&label, domain)?;
+            }
             fs::remove_file(&path).with_context(|| format!("remove {}", path.display()))?;
             removed += 1;
         }
@@ -198,12 +284,16 @@ pub fn watch_label(label_prefix: &str, name: &str) -> String {
     format!("{label_prefix}.{normalized}-{suffix}")
 }
 
-pub fn watch_loaded_status(label_prefix: &str, name: &str, domain: Domain) -> Option<bool> {
+pub fn agent_loaded_status(label_prefix: &str, domain: Domain) -> Option<bool> {
+    let label = format!("{label_prefix}.agent");
+    label_loaded_status(&label, domain)
+}
+
+fn label_loaded_status(label: &str, domain: Domain) -> Option<bool> {
     if env::var("CPULIMIT_TOP_DISABLE_LAUNCHD").ok().as_deref() == Some("1") {
         return None;
     }
 
-    let label = watch_label(label_prefix, name);
     let mut cmd = Command::new("launchctl");
     match domain {
         Domain::User => {
@@ -225,7 +315,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn generated_plist_uses_cpuguard_runner() {
+    fn generated_plist_uses_single_cpuguard_agent() {
         let dir = tempdir().expect("tempdir");
         let manager = RealLaunchdManager {
             label_prefix: "com.cpuguard".to_string(),
@@ -236,19 +326,21 @@ mod tests {
         manager
             .write_plist(
                 &plist,
-                "com.cpuguard.demo",
-                "demo",
-                20,
+                "com.cpuguard.agent",
                 "/usr/local/bin/cpuguard",
                 "/opt/homebrew/bin/cpulimit",
+                "/Users/demo/.config/cpuguard",
+                Domain::User,
             )
             .expect("write plist");
 
         let text = fs::read_to_string(plist).expect("read plist");
         assert!(text.contains("/usr/local/bin/cpuguard"));
-        assert!(text.contains("__watch-runner"));
+        assert!(text.contains("__agent"));
+        assert!(text.contains("--config-dir"));
         assert!(text.contains("--cpulimit-bin"));
         assert!(text.contains("ThrottleInterval"));
+        assert!(!text.contains("__watch-runner"));
         assert!(!text.contains("<string>-e</string>"));
     }
 
@@ -278,6 +370,48 @@ mod tests {
         );
         assert_eq!(manager.managed_label_from_plist(&external), None);
     }
+
+    #[test]
+    fn clean_managed_watches_keeps_single_agent_plist() {
+        let dir = tempdir().expect("tempdir");
+        let manager = RealLaunchdManager {
+            label_prefix: "com.cpuguard".to_string(),
+            launch_agents_dir: dir.path().to_path_buf(),
+        };
+        let agent = dir.path().join("com.cpuguard.agent.plist");
+        let legacy = dir.path().join("com.cpuguard.legacy.plist");
+        fs::write(
+            &agent,
+            "<plist><dict><key>Label</key><string>com.cpuguard.agent</string></dict></plist>",
+        )
+        .expect("write agent");
+        fs::write(
+            &legacy,
+            "<plist><dict><key>Label</key><string>com.cpuguard.legacy</string></dict></plist>",
+        )
+        .expect("write legacy");
+
+        let removed = manager
+            .clean_managed_watches(Domain::User)
+            .expect("clean legacy");
+
+        assert_eq!(removed, 1);
+        assert!(agent.exists());
+        assert!(!legacy.exists());
+    }
+
+    #[test]
+    fn restore_plist_restores_previous_contents() {
+        let dir = tempdir().expect("tempdir");
+        let plist = dir.path().join("com.cpuguard.agent.plist");
+        fs::write(&plist, "new broken plist").expect("write plist");
+
+        RealLaunchdManager::restore_plist(&plist, Some(b"previous good plist"))
+            .expect("restore plist");
+
+        let text = fs::read_to_string(plist).expect("read plist");
+        assert_eq!(text, "previous good plist");
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -286,18 +420,17 @@ pub struct NoopLaunchdManager {
 }
 
 impl LaunchdManager for NoopLaunchdManager {
-    fn ensure_watch(
+    fn ensure_agent(
         &self,
-        name: &str,
-        _limit: u16,
         _domain: Domain,
         _cpuguard_bin: &str,
         _cpulimit_bin: &str,
+        _config_dir: &str,
     ) -> Result<String> {
-        Ok(format!("{}.{}", self.label_prefix, name))
+        Ok(format!("{}.agent", self.label_prefix))
     }
 
-    fn remove_watch(&self, _name: &str, _domain: Domain) -> Result<()> {
+    fn remove_agent(&self, _domain: Domain) -> Result<()> {
         Ok(())
     }
 

@@ -11,7 +11,7 @@ pub struct ProcessEntry {
     pub elapsed_secs: u64,
 }
 
-/// macOS 上 PPID=1 且已知系统进程不应被标记为可疑孤儿。
+/// macOS 上 PPID=1 且已知系统进程不应被标记为高风险。
 const KNOWN_SYSTEM_PROCESSES: &[&str] = &[
     "Finder",
     "Dock",
@@ -36,22 +36,26 @@ const KNOWN_SYSTEM_PROCESSES: &[&str] = &[
 ];
 
 pub fn top_processes(count: usize) -> Result<Vec<ProcessEntry>> {
-    let out = Command::new("ps")
-        .args(["-Ao", "pid=,ppid=,pcpu=,etime=,comm="])
-        .output()?;
-    let text = String::from_utf8_lossy(&out.stdout);
-    let mut list: Vec<ProcessEntry> = text
-        .lines()
-        .filter_map(parse_ps_line)
-        .filter(|p| p.pid > 0 && !p.name.is_empty())
-        .collect();
-
+    let mut list = all_processes()?;
     list.sort_by(|a, b| {
         b.cpu
             .partial_cmp(&a.cpu)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
     list.truncate(count);
+    Ok(list)
+}
+
+pub fn all_processes() -> Result<Vec<ProcessEntry>> {
+    let out = Command::new("ps")
+        .args(["-Ao", "pid=,ppid=,pcpu=,etime=,comm="])
+        .output()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    let list: Vec<ProcessEntry> = text
+        .lines()
+        .filter_map(parse_ps_line)
+        .filter(|p| p.pid > 0 && !p.name.is_empty())
+        .collect();
     Ok(list)
 }
 
@@ -73,9 +77,24 @@ pub fn process_name(pid: u32) -> Result<Option<String>> {
     Ok(Some(name))
 }
 
-/// 判定进程是否为可疑孤儿进程。
-/// 五条件全满足：PPID=1、CPU ≥ 阈值、运行时间 ≥ 阈值、非系统路径、非已知系统进程。
-pub fn is_suspicious_orphan(
+pub fn process_args(pid: u32) -> Result<Option<String>> {
+    let out = Command::new("ps")
+        .args(["-p", &pid.to_string(), "-o", "args="])
+        .output()?;
+    if !out.status.success() {
+        return Ok(None);
+    }
+    let raw = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if raw.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(raw))
+}
+
+/// 判定进程是否应在 top 视图中显示高风险提示。
+/// 该判断只是排查线索，不表示进程一定是孤儿或应该被终止。
+/// 四条件全满足：PPID=1、CPU ≥ 阈值、运行时间 ≥ 阈值、非受保护系统进程。
+pub fn is_high_risk_process(
     entry: &ProcessEntry,
     cpu_threshold: f32,
     elapsed_threshold_secs: u64,
@@ -208,7 +227,7 @@ mod tests {
     }
 
     #[test]
-    fn suspicious_orphan_all_conditions_met() {
+    fn high_risk_process_all_conditions_met() {
         let entry = ProcessEntry {
             pid: 1234,
             ppid: 1,
@@ -216,11 +235,11 @@ mod tests {
             cpu: 100.0,
             elapsed_secs: 3600,
         };
-        assert!(is_suspicious_orphan(&entry, 50.0, 1800));
+        assert!(is_high_risk_process(&entry, 50.0, 1800));
     }
 
     #[test]
-    fn suspicious_orphan_ppid_not_1() {
+    fn high_risk_process_ppid_not_1() {
         let entry = ProcessEntry {
             pid: 1234,
             ppid: 500,
@@ -228,11 +247,11 @@ mod tests {
             cpu: 100.0,
             elapsed_secs: 3600,
         };
-        assert!(!is_suspicious_orphan(&entry, 50.0, 1800));
+        assert!(!is_high_risk_process(&entry, 50.0, 1800));
     }
 
     #[test]
-    fn suspicious_orphan_cpu_below_threshold() {
+    fn high_risk_process_cpu_below_threshold() {
         let entry = ProcessEntry {
             pid: 1234,
             ppid: 1,
@@ -240,11 +259,11 @@ mod tests {
             cpu: 49.9,
             elapsed_secs: 3600,
         };
-        assert!(!is_suspicious_orphan(&entry, 50.0, 1800));
+        assert!(!is_high_risk_process(&entry, 50.0, 1800));
     }
 
     #[test]
-    fn suspicious_orphan_cpu_at_threshold() {
+    fn high_risk_process_cpu_at_threshold() {
         let entry = ProcessEntry {
             pid: 1234,
             ppid: 1,
@@ -252,11 +271,11 @@ mod tests {
             cpu: 50.0,
             elapsed_secs: 3600,
         };
-        assert!(is_suspicious_orphan(&entry, 50.0, 1800));
+        assert!(is_high_risk_process(&entry, 50.0, 1800));
     }
 
     #[test]
-    fn suspicious_orphan_elapsed_below_threshold() {
+    fn high_risk_process_elapsed_below_threshold() {
         let entry = ProcessEntry {
             pid: 1234,
             ppid: 1,
@@ -264,11 +283,11 @@ mod tests {
             cpu: 100.0,
             elapsed_secs: 1799,
         };
-        assert!(!is_suspicious_orphan(&entry, 50.0, 1800));
+        assert!(!is_high_risk_process(&entry, 50.0, 1800));
     }
 
     #[test]
-    fn suspicious_orphan_system_process_excluded() {
+    fn high_risk_process_system_process_excluded() {
         let entry = ProcessEntry {
             pid: 1234,
             ppid: 1,
@@ -276,11 +295,11 @@ mod tests {
             cpu: 100.0,
             elapsed_secs: 3600,
         };
-        assert!(!is_suspicious_orphan(&entry, 50.0, 1800));
+        assert!(!is_high_risk_process(&entry, 50.0, 1800));
     }
 
     #[test]
-    fn suspicious_orphan_system_process_full_path_excluded() {
+    fn high_risk_process_system_process_full_path_excluded() {
         // ps -o comm= 返回完整路径时，basename 匹配排除列表
         let entry = ProcessEntry {
             pid: 164,
@@ -290,11 +309,11 @@ mod tests {
             cpu: 100.0,
             elapsed_secs: 86400,
         };
-        assert!(!is_suspicious_orphan(&entry, 50.0, 1800));
+        assert!(!is_high_risk_process(&entry, 50.0, 1800));
     }
 
     #[test]
-    fn suspicious_orphan_system_path_excluded() {
+    fn high_risk_process_system_path_excluded() {
         // /System/ 路径下的进程一律排除
         let entry = ProcessEntry {
             pid: 5000,
@@ -303,11 +322,11 @@ mod tests {
             cpu: 100.0,
             elapsed_secs: 7200,
         };
-        assert!(!is_suspicious_orphan(&entry, 50.0, 1800));
+        assert!(!is_high_risk_process(&entry, 50.0, 1800));
     }
 
     #[test]
-    fn suspicious_orphan_usr_libexec_excluded() {
+    fn high_risk_process_usr_libexec_excluded() {
         let entry = ProcessEntry {
             pid: 6000,
             ppid: 1,
@@ -315,7 +334,7 @@ mod tests {
             cpu: 80.0,
             elapsed_secs: 7200,
         };
-        assert!(!is_suspicious_orphan(&entry, 50.0, 1800));
+        assert!(!is_high_risk_process(&entry, 50.0, 1800));
     }
 
     #[test]
@@ -326,7 +345,7 @@ mod tests {
     }
 
     #[test]
-    fn suspicious_orphan_user_app_not_excluded() {
+    fn high_risk_process_user_app_not_excluded() {
         // /Applications/ 下的进程不应被系统路径规则排除
         let entry = ProcessEntry {
             pid: 7000,
@@ -335,6 +354,6 @@ mod tests {
             cpu: 100.0,
             elapsed_secs: 7200,
         };
-        assert!(is_suspicious_orphan(&entry, 50.0, 1800));
+        assert!(is_high_risk_process(&entry, 50.0, 1800));
     }
 }

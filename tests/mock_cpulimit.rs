@@ -100,8 +100,77 @@ fn top_default_creates_watch_rule() {
     );
     let rules_text = fs::read_to_string(cfg_dir.join("rules.toml")).expect("read rules");
     assert!(rules_text.contains("limit = 33"));
+    assert!(rules_text.contains("trigger_cpu = 25.0"));
+    assert!(rules_text.contains("release_cpu = 8.0"));
+    let agent_plist =
+        fs::read_to_string(agents_dir.join("com.cpuguard.agent.plist")).expect("read agent plist");
+    assert!(agent_plist.contains("__agent"));
+    assert!(agent_plist.contains("--config-dir"));
+    assert!(!agent_plist.contains("__watch-runner"));
     let _ = sleeper.kill();
     let _ = sleeper.wait();
+}
+
+#[test]
+fn watch_writes_thresholds_and_single_agent_plist() {
+    let dir = tempdir().expect("tempdir");
+    let cfg_dir = dir.path().join("cfg");
+    let agents_dir = dir.path().join("agents");
+    let mock_bin = dir.path().join("cpulimit-mock.sh");
+    fs::create_dir_all(&cfg_dir).expect("create cfg dir");
+    fs::create_dir_all(&agents_dir).expect("create agents dir");
+    fs::write(
+        &mock_bin,
+        "#!/bin/sh\nif [ \"$1\" = \"--help\" ]; then\n  echo \"Usage: cpulimit [OPTIONS...] TARGET\"\n  exit 1\nfi\nexit 0\n",
+    )
+    .expect("write mock bin");
+    Command::new("chmod")
+        .args(["+x", mock_bin.to_string_lossy().as_ref()])
+        .status()
+        .expect("chmod mock");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_cpuguard"))
+        .args([
+            "watch",
+            "cpuguard_test_target_iOABiz",
+            "--limit",
+            "20",
+            "--trigger-cpu",
+            "20",
+            "--release-cpu",
+            "6",
+            "--args-contains",
+            "NGNAuditXPCClient",
+        ])
+        .env("CPULIMIT_TOP_CONFIG_DIR", &cfg_dir)
+        .env("CPULIMIT_TOP_CPULIMIT_BIN", &mock_bin)
+        .env("CPULIMIT_TOP_DISABLE_LAUNCHD", "1")
+        .env("CPULIMIT_TOP_LAUNCH_AGENTS_DIR", &agents_dir)
+        .output()
+        .expect("run binary");
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let rules_text = fs::read_to_string(cfg_dir.join("rules.toml")).expect("read rules");
+    assert!(rules_text.contains("name = \"cpuguard_test_target_iOABiz\""));
+    assert!(rules_text.contains("trigger_cpu = 20.0"));
+    assert!(rules_text.contains("release_cpu = 6.0"));
+    assert!(rules_text.contains("args_contains = \"NGNAuditXPCClient\""));
+
+    let entries = fs::read_dir(&agents_dir)
+        .expect("read agents dir")
+        .map(|entry| {
+            entry
+                .expect("entry")
+                .file_name()
+                .to_string_lossy()
+                .to_string()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(entries, vec!["com.cpuguard.agent.plist"]);
 }
 
 #[test]
@@ -143,6 +212,50 @@ updated_at = "2026-03-05T11:00:00+08:00"
 }
 
 #[test]
+fn watches_filters_rules_by_domain() {
+    let dir = tempdir().expect("tempdir");
+    let cfg_dir = dir.path().join("cfg");
+    fs::create_dir_all(&cfg_dir).expect("create cfg dir");
+
+    fs::write(
+        cfg_dir.join("rules.toml"),
+        r#"
+version = 1
+[[rules]]
+name = "user_only_proc"
+limit = 21
+domain = "user"
+created_at = "2026-03-05T11:00:00+08:00"
+updated_at = "2026-03-05T11:00:00+08:00"
+
+[[rules]]
+name = "system_only_proc"
+limit = 22
+domain = "system"
+created_at = "2026-03-05T11:00:00+08:00"
+updated_at = "2026-03-05T11:00:00+08:00"
+"#,
+    )
+    .expect("write rules");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_cpuguard"))
+        .args(["--domain", "user", "watches"])
+        .env("CPULIMIT_TOP_CONFIG_DIR", &cfg_dir)
+        .env("CPULIMIT_TOP_DISABLE_LAUNCHD", "1")
+        .output()
+        .expect("run watches");
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("user_only_proc"));
+    assert!(!stdout.contains("system_only_proc"));
+}
+
+#[test]
 fn status_shows_table_and_running_state() {
     let dir = tempdir().expect("tempdir");
     let cfg_dir = dir.path().join("cfg");
@@ -155,17 +268,26 @@ fn status_shows_table_and_running_state() {
             r#"{{
   "version": 1,
   "instances": [
-    {{
-      "id": "ins_test",
-      "mode": "adhoc",
-      "cpulimit_pid": {self_pid},
+	    {{
+	      "id": "ins_test",
+	      "mode": "adhoc",
+	      "cpulimit_pid": {self_pid},
       "target": {{ "kind": "pid", "value": {self_pid} }},
-      "domain": "user",
-      "started_at": "2026-03-05T11:00:00+08:00",
-      "owner_label": null
-    }}
-  ]
-}}"#
+	      "domain": "user",
+	      "started_at": "2026-03-05T11:00:00+08:00",
+	      "owner_label": null
+	    }},
+	    {{
+	      "id": "ins_system",
+	      "mode": "adhoc",
+	      "cpulimit_pid": {self_pid},
+	      "target": {{ "kind": "pid", "value": {self_pid} }},
+	      "domain": "system",
+	      "started_at": "2026-03-05T11:00:00+08:00",
+	      "owner_label": null
+	    }}
+	  ]
+	}}"#
         ),
     )
     .expect("write state");
@@ -183,7 +305,77 @@ fn status_shows_table_and_running_state() {
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("CPULIMIT"));
+    assert!(stdout.contains("DOMAIN"));
     assert!(stdout.contains("ins_test"));
+    assert!(stdout.contains("user"));
+    assert!(stdout.contains("running"));
+    assert!(!stdout.contains("ins_system"));
+}
+
+#[test]
+fn default_command_shows_dashboard_with_limited_processes() {
+    let dir = tempdir().expect("tempdir");
+    let cfg_dir = dir.path().join("cfg");
+    fs::create_dir_all(&cfg_dir).expect("create cfg dir");
+
+    let self_pid = std::process::id();
+    fs::write(
+        cfg_dir.join("rules.toml"),
+        r#"
+version = 2
+[[rules]]
+name = "cpuguard_dash_rule"
+limit = 20
+trigger_cpu = 15.0
+release_cpu = 6.0
+domain = "user"
+created_at = "2026-03-05T11:00:00+08:00"
+updated_at = "2026-03-05T11:00:00+08:00"
+"#,
+    )
+    .expect("write rules");
+    fs::write(
+        cfg_dir.join("state.json"),
+        format!(
+            r#"{{
+  "version": 2,
+  "instances": [
+    {{
+      "id": "ins_dash",
+      "mode": "watch",
+      "cpulimit_pid": {self_pid},
+      "target": {{ "kind": "pid", "value": {self_pid} }},
+      "rule_name": "cpuguard_dash_rule",
+      "last_observed_cpu": 18.5,
+      "domain": "user",
+      "started_at": "2026-03-05T11:00:00+08:00",
+      "owner_label": "com.cpuguard.agent"
+    }}
+  ]
+}}"#
+        ),
+    )
+    .expect("write state");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_cpuguard"))
+        .env("CPULIMIT_TOP_CONFIG_DIR", &cfg_dir)
+        .env("CPULIMIT_TOP_DISABLE_LAUNCHD", "1")
+        .output()
+        .expect("run dashboard");
+
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("CPU Guard Dashboard"));
+    assert!(stdout.contains("AGENT"));
+    assert!(stdout.contains("skipped"));
+    assert!(stdout.contains("WATCH RULES"));
+    assert!(stdout.contains("LIMITED PROCESSES"));
+    assert!(stdout.contains("cpuguard_dash_rule"));
+    assert!(stdout.contains("ins_dash"));
     assert!(stdout.contains("running"));
 }
 

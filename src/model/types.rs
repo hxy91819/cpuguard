@@ -1,7 +1,18 @@
 use chrono::{DateTime, Local};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub const DEFAULT_TRIGGER_CPU: f32 = 25.0;
+pub const DEFAULT_RELEASE_CPU: f32 = 8.0;
+
+fn default_trigger_cpu() -> f32 {
+    DEFAULT_TRIGGER_CPU
+}
+
+fn default_release_cpu() -> f32 {
+    DEFAULT_RELEASE_CPU
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "lowercase")]
 pub enum Domain {
     User,
@@ -21,6 +32,12 @@ impl std::fmt::Display for Domain {
 pub struct Rule {
     pub name: String,
     pub limit: u16,
+    #[serde(default = "default_trigger_cpu")]
+    pub trigger_cpu: f32,
+    #[serde(default = "default_release_cpu")]
+    pub release_cpu: f32,
+    #[serde(default)]
+    pub args_contains: Option<String>,
     pub domain: Domain,
     pub created_at: DateTime<Local>,
     pub updated_at: DateTime<Local>,
@@ -52,6 +69,10 @@ pub struct ManagedInstance {
     pub mode: ManagedMode,
     pub cpulimit_pid: u32,
     pub target: ManagedTarget,
+    #[serde(default)]
+    pub rule_name: Option<String>,
+    #[serde(default)]
+    pub last_observed_cpu: Option<f32>,
     pub domain: Domain,
     pub started_at: DateTime<Local>,
     pub owner_label: Option<String>,
@@ -66,7 +87,7 @@ pub struct StateFile {
 impl Default for RulesFile {
     fn default() -> Self {
         Self {
-            version: 1,
+            version: 2,
             rules: Vec::new(),
         }
     }
@@ -75,7 +96,7 @@ impl Default for RulesFile {
 impl Default for StateFile {
     fn default() -> Self {
         Self {
-            version: 1,
+            version: 2,
             instances: Vec::new(),
         }
     }

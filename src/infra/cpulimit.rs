@@ -1,7 +1,11 @@
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+use std::thread;
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
+
+use crate::infra::runtime::process_alive;
 
 pub trait CpulimitExecutor {
     fn ensure_available(&self) -> Result<()>;
@@ -53,9 +57,24 @@ impl CpulimitExecutor for RealCpulimitExecutor {
     }
 
     fn start_adhoc(&self, target_pid: u32, limit: u16) -> Result<u32> {
-        let args = pid_limit_args(target_pid, limit);
-        let child = self.spawn_cpulimit(&args)?;
-        Ok(child.id())
+        let output = Command::new("/bin/sh")
+            .arg("-c")
+            .arg("\"$1\" -p \"$2\" -l \"$3\" -i >/dev/null 2>&1 & echo $!")
+            .arg("cpuguard-cpulimit")
+            .arg(&self.bin)
+            .arg(target_pid.to_string())
+            .arg(limit.to_string())
+            .output()
+            .with_context(|| format!("spawn detached cpulimit for pid {target_pid}"))?;
+        if !output.status.success() {
+            bail!("spawn detached cpulimit failed for pid {target_pid}");
+        }
+        let pid_text = String::from_utf8_lossy(&output.stdout);
+        let pid = pid_text
+            .trim()
+            .parse::<u32>()
+            .with_context(|| format!("parse cpulimit pid from {:?}", pid_text))?;
+        Ok(pid)
     }
 
     fn run_for_target(&self, target_pid: u32, limit: u16) -> Result<()> {
@@ -74,8 +93,17 @@ impl CpulimitExecutor for RealCpulimitExecutor {
             .status()
             .context("kill cpulimit instance")?;
         if !status.success() {
-            bail!("failed to stop cpulimit pid {}", cpulimit_pid);
+            if process_alive(cpulimit_pid) {
+                bail!("failed to stop cpulimit pid {}", cpulimit_pid);
+            }
+            return Ok(());
         }
-        Ok(())
+        for _ in 0..20 {
+            if !process_alive(cpulimit_pid) {
+                return Ok(());
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+        bail!("cpulimit pid {} did not exit after SIGTERM", cpulimit_pid);
     }
 }

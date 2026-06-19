@@ -1,0 +1,4 @@
+interface:
+  display_name: "CPU Guard Diagnose"
+  short_description: "Diagnose macOS CPU pressure and recommend cpuguard rules safely."
+  default_prompt: "Diagnose this Mac CPU issue and recommend cpuguard configuration."

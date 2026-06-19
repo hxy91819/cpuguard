@@ -9,6 +9,16 @@ use crate::model::{
     Domain, ManagedInstance, ManagedMode, ManagedTarget, Rule, RulesFile, StateFile,
 };
 
+#[derive(Debug, Clone)]
+pub struct RuleUpdate {
+    pub name: String,
+    pub limit: u16,
+    pub trigger_cpu: f32,
+    pub release_cpu: f32,
+    pub args_contains: Option<String>,
+    pub domain: Domain,
+}
+
 pub fn ensure_parent_dir(path: &Path) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).with_context(|| format!("create dir {}", parent.display()))?;
@@ -32,12 +42,20 @@ pub fn save_rules(path: &Path, rules: &RulesFile) -> Result<()> {
     atomic_write(path, text.as_bytes())
 }
 
-pub fn upsert_rule(path: &Path, name: &str, limit: u16, domain: Domain) -> Result<Rule> {
+pub fn upsert_rule(path: &Path, update: RuleUpdate) -> Result<Rule> {
     let mut rules = load_rules(path)?;
     let now = Local::now();
-    if let Some(existing) = rules.rules.iter_mut().find(|r| r.name == name) {
-        existing.limit = limit;
-        existing.domain = domain;
+    rules.version = 2;
+    if let Some(existing) = rules
+        .rules
+        .iter_mut()
+        .find(|r| r.name == update.name && r.domain == update.domain)
+    {
+        existing.limit = update.limit;
+        existing.trigger_cpu = update.trigger_cpu;
+        existing.release_cpu = update.release_cpu;
+        existing.args_contains = update.args_contains;
+        existing.domain = update.domain;
         existing.updated_at = now;
         let rule = existing.clone();
         save_rules(path, &rules)?;
@@ -45,9 +63,12 @@ pub fn upsert_rule(path: &Path, name: &str, limit: u16, domain: Domain) -> Resul
     }
 
     let rule = Rule {
-        name: name.to_string(),
-        limit,
-        domain,
+        name: update.name,
+        limit: update.limit,
+        trigger_cpu: update.trigger_cpu,
+        release_cpu: update.release_cpu,
+        args_contains: update.args_contains,
+        domain: update.domain,
         created_at: now,
         updated_at: now,
     };
@@ -56,15 +77,28 @@ pub fn upsert_rule(path: &Path, name: &str, limit: u16, domain: Domain) -> Resul
     Ok(rule)
 }
 
-pub fn remove_rule(path: &Path, name: &str) -> Result<bool> {
+pub fn remove_rule(path: &Path, name: &str, domain: Domain) -> Result<bool> {
     let mut rules = load_rules(path)?;
     let before = rules.rules.len();
-    rules.rules.retain(|r| r.name != name);
+    rules
+        .rules
+        .retain(|r| !(r.name == name && r.domain == domain));
     let changed = before != rules.rules.len();
     if changed {
         save_rules(path, &rules)?;
     }
     Ok(changed)
+}
+
+pub fn remove_rules_by_domain(path: &Path, domain: Domain) -> Result<usize> {
+    let mut rules = load_rules(path)?;
+    let before = rules.rules.len();
+    rules.rules.retain(|r| r.domain != domain);
+    let removed = before - rules.rules.len();
+    if removed > 0 {
+        save_rules(path, &rules)?;
+    }
+    Ok(removed)
 }
 
 pub fn load_state(path: &Path) -> Result<StateFile> {
@@ -90,6 +124,7 @@ pub fn add_adhoc_instance(
     domain: Domain,
 ) -> Result<()> {
     let mut state = load_state(path)?;
+    state.version = 2;
     state.instances.push(ManagedInstance {
         id: format!(
             "ins_{}",
@@ -101,11 +136,65 @@ pub fn add_adhoc_instance(
         mode: ManagedMode::Adhoc,
         cpulimit_pid,
         target: ManagedTarget::Pid(target_pid),
+        rule_name: None,
+        last_observed_cpu: None,
         domain,
         started_at: Local::now(),
         owner_label: None,
     });
     save_state(path, &state)
+}
+
+pub fn add_watch_instance(
+    path: &Path,
+    cpulimit_pid: u32,
+    target_pid: u32,
+    rule_name: &str,
+    last_observed_cpu: f32,
+    domain: Domain,
+    owner_label: &str,
+) -> Result<()> {
+    let mut state = load_state(path)?;
+    state.version = 2;
+    state.instances.retain(|i| {
+        !(i.mode == ManagedMode::Watch
+            && i.domain == domain
+            && matches!(i.target, ManagedTarget::Pid(pid) if pid == target_pid))
+    });
+    state.instances.push(ManagedInstance {
+        id: format!(
+            "ins_{}",
+            Local::now()
+                .timestamp_nanos_opt()
+                .unwrap_or_default()
+                .unsigned_abs()
+        ),
+        mode: ManagedMode::Watch,
+        cpulimit_pid,
+        target: ManagedTarget::Pid(target_pid),
+        rule_name: Some(rule_name.to_string()),
+        last_observed_cpu: Some(last_observed_cpu),
+        domain,
+        started_at: Local::now(),
+        owner_label: Some(owner_label.to_string()),
+    });
+    save_state(path, &state)
+}
+
+pub fn update_instance_cpu(path: &Path, cpulimit_pid: u32, cpu: f32) -> Result<bool> {
+    let mut state = load_state(path)?;
+    let mut changed = false;
+    for instance in &mut state.instances {
+        if instance.cpulimit_pid == cpulimit_pid {
+            instance.last_observed_cpu = Some(cpu);
+            changed = true;
+        }
+    }
+    if changed {
+        state.version = 2;
+        save_state(path, &state)?;
+    }
+    Ok(changed)
 }
 
 pub fn remove_instance_by_pid(path: &Path, cpulimit_pid: u32) -> Result<bool> {

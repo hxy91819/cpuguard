@@ -3,11 +3,17 @@ use std::process::Command;
 use anyhow::{Context, Result, bail};
 
 pub fn process_alive(pid: u32) -> bool {
-    Command::new("kill")
-        .args(["-0", &pid.to_string()])
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+    let output = Command::new("ps")
+        .args(["-p", &pid.to_string(), "-o", "stat="])
+        .output();
+    let Ok(output) = output else {
+        return true;
+    };
+    if !output.status.success() {
+        return false;
+    }
+    let stat = String::from_utf8_lossy(&output.stdout);
+    !stat.trim_start().starts_with('Z')
 }
 
 pub fn first_pid_by_name(name: &str) -> Result<Option<u32>> {
