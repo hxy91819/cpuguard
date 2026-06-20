@@ -1,8 +1,10 @@
 # 04 Data Model
 
 ## 1. 文件位置
-- 规则文件：`~/.config/cpuguard/rules.toml`
-- 实例状态：`~/.config/cpuguard/state.json`
+- 系统域规则文件：`/Library/Application Support/cpuguard/rules.toml`
+- 系统域实例状态：`/Library/Application Support/cpuguard/state.json`
+- 用户域规则文件：`~/.config/cpuguard/rules.toml`
+- 用户域实例状态：`~/.config/cpuguard/state.json`
 
 ## 2. Rule
 ```rust
@@ -52,6 +54,7 @@ ManagedInstance {
   cpulimit_pid: u32,
   target: ManagedTarget,        // pid(u32) | name(String)
   rule_name: Option<String>,    // watch 实例填规则名
+  limit: Option<u16>,            // watch 实例记录启动时的 limit，用于规则更新后替换旧实例
   last_observed_cpu: Option<f32>,
   domain: Domain,               // user | system
   started_at: DateTime,
@@ -70,6 +73,7 @@ ManagedInstance {
       "cpulimit_pid": 22341,
       "target": { "kind": "pid", "value": 9211 },
       "rule_name": null,
+      "limit": null,
       "last_observed_cpu": null,
       "domain": "user",
       "started_at": "2026-03-05T11:02:00+08:00",
@@ -81,6 +85,7 @@ ManagedInstance {
       "cpulimit_pid": 22402,
       "target": { "kind": "pid", "value": 21495 },
       "rule_name": "ztsmedr",
+      "limit": 20,
       "last_observed_cpu": 36.2,
       "domain": "user",
       "started_at": "2026-03-05T11:03:00+08:00",

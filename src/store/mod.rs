@@ -19,6 +19,16 @@ pub struct RuleUpdate {
     pub domain: Domain,
 }
 
+pub struct WatchInstanceUpdate<'a> {
+    pub cpulimit_pid: u32,
+    pub target_pid: u32,
+    pub rule_name: &'a str,
+    pub limit: u16,
+    pub last_observed_cpu: f32,
+    pub domain: Domain,
+    pub owner_label: &'a str,
+}
+
 pub fn ensure_parent_dir(path: &Path) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).with_context(|| format!("create dir {}", parent.display()))?;
@@ -137,6 +147,7 @@ pub fn add_adhoc_instance(
         cpulimit_pid,
         target: ManagedTarget::Pid(target_pid),
         rule_name: None,
+        limit: None,
         last_observed_cpu: None,
         domain,
         started_at: Local::now(),
@@ -145,21 +156,13 @@ pub fn add_adhoc_instance(
     save_state(path, &state)
 }
 
-pub fn add_watch_instance(
-    path: &Path,
-    cpulimit_pid: u32,
-    target_pid: u32,
-    rule_name: &str,
-    last_observed_cpu: f32,
-    domain: Domain,
-    owner_label: &str,
-) -> Result<()> {
+pub fn add_watch_instance(path: &Path, update: WatchInstanceUpdate<'_>) -> Result<()> {
     let mut state = load_state(path)?;
     state.version = 2;
     state.instances.retain(|i| {
         !(i.mode == ManagedMode::Watch
-            && i.domain == domain
-            && matches!(i.target, ManagedTarget::Pid(pid) if pid == target_pid))
+            && i.domain == update.domain
+            && matches!(i.target, ManagedTarget::Pid(pid) if pid == update.target_pid))
     });
     state.instances.push(ManagedInstance {
         id: format!(
@@ -170,13 +173,14 @@ pub fn add_watch_instance(
                 .unsigned_abs()
         ),
         mode: ManagedMode::Watch,
-        cpulimit_pid,
-        target: ManagedTarget::Pid(target_pid),
-        rule_name: Some(rule_name.to_string()),
-        last_observed_cpu: Some(last_observed_cpu),
-        domain,
+        cpulimit_pid: update.cpulimit_pid,
+        target: ManagedTarget::Pid(update.target_pid),
+        rule_name: Some(update.rule_name.to_string()),
+        limit: Some(update.limit),
+        last_observed_cpu: Some(update.last_observed_cpu),
+        domain: update.domain,
         started_at: Local::now(),
-        owner_label: Some(owner_label.to_string()),
+        owner_label: Some(update.owner_label.to_string()),
     });
     save_state(path, &state)
 }

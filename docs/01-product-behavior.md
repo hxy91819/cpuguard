@@ -35,14 +35,15 @@
 - `clean` 不能影响手工启动的 `cpulimit`。
 - 所有被托管对象都必须可追溯到 `instance_registry` 或受控 `launchd label`。
 - 同一 `(domain, name)` 在 `rules.toml` 中唯一；用户域和系统域允许存在同名规则，互不覆盖。
-- CLI 默认域为 `user`。
-- `user` 域只承诺控制当前用户有权限控制的目标；目标由 `root` 或系统服务账号拥有时，必须显式使用 `--domain system`，否则规则可能加载但限速实例不会实际生效。
+- CLI 默认域为 `system`。
+- `system` 域适合控制 `root` 或系统服务账号拥有的后台目标，相关写入和 `launchd` 操作通常需要 `sudo`；`user` 域只承诺控制当前用户有权限控制的目标，必须显式使用 `--domain user`。
 - `cpuguard` 无子命令必须是只读 dashboard；`top` 的默认动作仍是 `watch`，但必须通过显式 `top` 子命令进入。
 - `watch` 与重启恢复依赖一个受控 label：`com.cpuguard.agent`；规则是配置数据，不允许为每条规则创建独立开机启动项。
 - agent 每轮最多刷新一次进程快照，并用该快照评估全部规则。
 - agent 空闲时必须低频扫描，命中热点后才临时提高扫描频率；不得因限速管理自身造成明显 CPU 消耗。
 - agent 单轮扫描失败时不得退出进程；必须记录错误并退避后继续下一轮，避免 `launchd` 重启循环。
 - watch 限速使用滞回：`trigger_cpu` 触发，`release_cpu` 释放，避免在阈值附近反复启动/停止。
+- watch 规则的 `limit` 更新后，agent 必须替换仍在运行的旧限速实例，避免旧 `cpulimit -l` 参数继续生效。
 - `top` 的风险提示只是排查线索，不表示进程一定是孤儿或应被终止。
 - `top --allow-kill` 的终止动作只允许命中当前快照中的非系统进程，且必须经过显式确认。
 
@@ -106,7 +107,7 @@ stateDiagram-v2
 2. 匹配：默认按进程 basename 与规则 `name` 精确匹配；可选 `args_contains` 进一步限定命中范围。
 3. 触发：同一 PID 连续 `hot_required_samples` 轮 CPU 大于等于 `trigger_cpu` 后启动 `cpulimit -p <pid>`。
 4. 释放：同一 PID 连续 `cold_required_samples` 轮 CPU 小于等于 `release_cpu` 后停止对应 `cpulimit`。
-5. 规则更新：已有实例若不再匹配当前规则（例如新增或修改 `args_contains`），agent 必须停止该实例并清理 state。
+5. 规则更新：已有实例若不再匹配当前规则（例如新增或修改 `args_contains`），或记录的 `limit` 与当前规则不一致，agent 必须停止该实例并清理 state，让后续扫描按最新规则重新启动。
 6. 清理：目标 PID 退出、规则删除、`cpulimit` 退出或超出托管上限时，agent 只清理 state 中登记的实例。
 7. 去重：当某个 target PID 已有一个 state 登记且存活的托管 `cpulimit` 时，agent 可清理同一 target PID 上其它未登记的重复 `cpulimit`，避免历史残留造成额外负载。
 8. backoff：同一 PID 的限速实例异常退出后，短时间内不得无限重启。
