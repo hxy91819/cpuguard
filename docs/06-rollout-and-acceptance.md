@@ -2,7 +2,7 @@
 
 ## 1. 里程碑
 1. M1：CLI 骨架 + 配置/状态存储 + 基础错误模型。
-2. M2：watch/unwatch/watches + 单一 launchd agent 用户域托管。
+2. M2：watch/unwatch/watches + 单一 launchd agent 当前域托管。
 3. M3：top/status + ad-hoc 管理 + instance_registry。
 4. M4：agent 多 PID 自动限速 + 滞回 + backoff。
 5. M5：clean 零误杀链路 + 验收测试 + 发布文档。
@@ -25,6 +25,8 @@
 | 正确 | `watch` 同名更新 | 规则被覆盖且仅一个条目 |
 | 正确 | 无子命令默认执行 | 输出 dashboard，包含 agent status、watch rules 与 limited processes |
 | 正确 | `top` 默认路径 | 选择进程后生成/更新 watch 规则 |
+| 正确 | CLI 默认 domain | 未传 `--domain` 时使用 `system` |
+| 正确 | system 默认配置目录 | 未传 `CPULIMIT_TOP_CONFIG_DIR` 时使用 `/Library/Application Support/cpuguard`，不依赖调用者 `$HOME` |
 | 正确 | `top` 展示已限制 PID | 命中 running 托管实例的当前快照行显示 `LIMITED=YES` |
 | 安全 | `top` 默认交互 | 不展示或执行 `k/x` 终止命令，仅允许限速、刷新、退出 |
 | 安全 | `top --allow-kill` 终止动作 | 仅作用于当前快照，需确认，且禁止对系统进程触发 |

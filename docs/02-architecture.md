@@ -48,7 +48,7 @@ sequenceDiagram
     C->>R: upsert(rule)
     R-->>C: ok
     C->>L: ensure_agent(label=com.cpuguard.agent)
-    C->>L: bootstrap user/<uid>/agent if missing
+    C->>L: bootstrap current domain agent if missing
     L-->>C: ok
     C-->>U: rule saved + agent active
 ```

@@ -9,7 +9,7 @@
 - 项目名称：`cpuguard`。
 - 目标：用 Rust 实现 CPU 限速管理层，底层执行器使用外部 `cpulimit`。
 - 平台：V1 仅支持 macOS。
-- 默认运行域：`launchd` 用户域（`LaunchAgents`）。
+- 默认运行域：`launchd` 系统域（`LaunchDaemons`）。
 
 ## Development Workflow
 - 文档先行：任何行为变更，先更新 `docs/`，再修改代码。
@@ -31,7 +31,7 @@
 ## Technical Constraints
 - 使用 Rust 实现业务逻辑，不重写 CPU 节流算法。
 - 执行器固定为外部 `cpulimit`（通过命令调用）。
-- 仅当用户显式指定 `--domain system` 时才允许系统域操作。
+- 系统域是默认运行域；需要限制当前用户拥有的普通进程时，必须显式指定 `--domain user`。
 
 ## Project Structure
 - 目录结构（Rust）：

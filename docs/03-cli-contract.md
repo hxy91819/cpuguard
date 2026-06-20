@@ -9,14 +9,15 @@
 | `top` | 展示高 CPU 进程并默认创建 watch 规则 | 无 | `--limit <N>`, `--count <K>`, `--refresh <S>`, `--once`, `--risk-cpu <F>`, `--allow-kill` |
 | `status` | 查看当前 domain 的托管实例状态 | 无 | 无 |
 | `clean` | 清理本工具托管对象 | 无 | `--yes` |
-| `install-agent` | 安装/刷新单一用户域 agent | 无 | 无 |
+| `install-agent` | 安装/刷新当前 domain 的单一 agent | 无 | 无 |
 | 无子命令 | 只读 dashboard，展示规则、agent 状态与当前被限制进程 | 无 | 无 |
 
-全局参数：`--domain <user|system>`（默认 `user`）。
+全局参数：`--domain <user|system>`（默认 `system`）。
 
 域语义：
-- `user`：默认域，生成 `~/Library/LaunchAgents/com.cpuguard.agent.plist`，适合当前用户拥有的进程。
-- `system`：生成 `/Library/LaunchDaemons/com.cpuguard.agent.plist`，必须显式指定并通常需要 `sudo`。当目标进程由 `root` 或系统服务账号拥有时，只有系统域 agent 才能让外部 `cpulimit` 实际控制目标。
+- `system`：默认域，生成 `/Library/LaunchDaemons/com.cpuguard.agent.plist`，默认配置目录为 `/Library/Application Support/cpuguard`，通常需要 `sudo` 写入。目标进程由 `root` 或系统服务账号拥有时，只有系统域 agent 才能让外部 `cpulimit` 实际控制目标。
+- `user`：生成 `~/Library/LaunchAgents/com.cpuguard.agent.plist`，默认配置目录为 `~/.config/cpuguard`，适合当前用户拥有的进程，必须显式传入 `--domain user`。
+- `CPULIMIT_TOP_CONFIG_DIR` 存在时覆盖上述默认配置目录，主要用于测试或显式迁移场景。
 
 ## 2. 参数约束
 - `--limit`: 整数，范围 `1..=1200`。
@@ -61,21 +62,22 @@
    - 同一 PID 连续达到释放条件才停止限速。
    - `args_contains` 存在时，目标进程完整命令行必须包含该文本。
 13. 当已有托管实例不再匹配当前规则（包括 `args_contains` 更新后不再命中）时，agent 必须停止该实例并清理 state。
-14. agent 对单个 target 的启动或 state 记录失败不得终止整个 agent；必须对该 target 进入 backoff，并继续评估其它规则。
-15. agent 单轮扫描发生 I/O、解析或进程采样错误时不得退出；必须记录错误并按空闲 backoff 间隔继续下一轮。
-16. agent 对已登记的托管 target PID 必须执行重复实例收敛：登记的 `cpulimit_pid` 存活时保留该实例，并只停止同一 target PID 上未登记到 state 的其它 `cpulimit -p <pid>`；登记的 `cpulimit_pid` 已退出但 target 仍存活时，必须先停止同 target 上未登记到 state 的其它 `cpulimit -p <pid>`，再清理 stale state 并进入 backoff。其它 domain 或其它 mode 已登记的 managed `cpulimit_pid` 不得被当作重复实例清理。
-17. `ensure-agent`/`install-agent` 更新已加载的 launchd agent 时必须实际 reload 运行中的 job；若旧 job bootout 或新 job bootstrap 失败，必须恢复旧 plist；若旧 job 先前处于 loaded 状态且已 bootout，还必须尝试重新 bootstrap 旧 job。新 agent 已成功 bootstrap 后，旧版 legacy `com.cpuguard.*` plist 清理是 best-effort；清理失败不得让已成功的 agent 安装/刷新命令返回失败。
-18. `unwatch <name>` 必须先成功停止当前 domain 下该规则名对应的 watch 实例，再删除规则和 state；若停止失败，不得删除规则或 state。删除当前 domain 最后一条规则后必须卸载对应 agent；若卸载失败，必须恢复删除前的规则文件并返回错误。
-19. 跨 domain 的 cpuguard 托管 ad-hoc 实例不得被误报为外部 `cpulimit` 冲突；冲突检测应跳过 state 中登记的全部 managed ad-hoc `cpulimit_pid`，但只自动停止当前 domain 且匹配选择器的 managed ad-hoc 实例。
-20. `status` 只展示当前 domain 的实例，并包含 `DOMAIN` 列。
-21. `watches` 只展示当前 `--domain` 的规则，并必须包含 `HINT` 列；当 user-domain 规则已加载、目标 PID 存在、但当前 domain 没有该规则的 running watch 实例，且目标 owner 不是当前用户时，提示 `use --domain system`。
-22. `clean --yes` 可清理受控 `com.cpuguard.agent` 和旧版 legacy `com.cpuguard.*` plist；不得按进程名模糊清理外部 `cpulimit`。`clean` 必须先成功停止当前 domain 的托管实例，再删除对应规则并卸载当前 domain 的 agent；若任一托管实例停止失败，不得删除该实例 state 或该 domain 规则，且 agent 必须保持可服务状态；若 agent 卸载失败，必须恢复删除前的规则文件并返回错误。
+14. 当已有 watch 实例记录的 `limit` 与当前规则 `limit` 不一致时，agent 必须停止该实例并清理 state，后续扫描按最新 `limit` 重新启动 `cpulimit`。
+15. agent 对单个 target 的启动或 state 记录失败不得终止整个 agent；必须对该 target 进入 backoff，并继续评估其它规则。
+16. agent 单轮扫描发生 I/O、解析或进程采样错误时不得退出；必须记录错误并按空闲 backoff 间隔继续下一轮。
+17. agent 对已登记的托管 target PID 必须执行重复实例收敛：登记的 `cpulimit_pid` 存活时保留该实例，并只停止同一 target PID 上未登记到 state 的其它 `cpulimit -p <pid>`；登记的 `cpulimit_pid` 已退出但 target 仍存活时，必须先停止同 target 上未登记到 state 的其它 `cpulimit -p <pid>`，再清理 stale state 并进入 backoff。其它 domain 或其它 mode 已登记的 managed `cpulimit_pid` 不得被当作重复实例清理。
+18. `ensure-agent`/`install-agent` 更新已加载的 launchd agent 时必须实际 reload 运行中的 job；若旧 job bootout 或新 job bootstrap 失败，必须恢复旧 plist；若旧 job 先前处于 loaded 状态且已 bootout，还必须尝试重新 bootstrap 旧 job。新 agent 已成功 bootstrap 后，旧版 legacy `com.cpuguard.*` plist 清理是 best-effort；清理失败不得让已成功的 agent 安装/刷新命令返回失败。
+19. `unwatch <name>` 必须先成功停止当前 domain 下该规则名对应的 watch 实例，再删除规则和 state；若停止失败，不得删除规则或 state。删除当前 domain 最后一条规则后必须卸载对应 agent；若卸载失败，必须恢复删除前的规则文件并返回错误。
+20. 跨 domain 的 cpuguard 托管 ad-hoc 实例不得被误报为外部 `cpulimit` 冲突；冲突检测应跳过 state 中登记的全部 managed ad-hoc `cpulimit_pid`，但只自动停止当前 domain 且匹配选择器的 managed ad-hoc 实例。
+21. `status` 只展示当前 domain 的实例，并包含 `DOMAIN` 列。
+22. `watches` 只展示当前 `--domain` 的规则，并必须包含 `HINT` 列；当 user-domain 规则已加载、目标 PID 存在、但当前 domain 没有该规则的 running watch 实例，且目标 owner 不是当前用户时，提示 `use --domain system`。
+23. `clean --yes` 可清理受控 `com.cpuguard.agent` 和旧版 legacy `com.cpuguard.*` plist；不得按进程名模糊清理外部 `cpulimit`。`clean` 必须先成功停止当前 domain 的托管实例，再删除对应规则并卸载当前 domain 的 agent；若任一托管实例停止失败，不得删除该实例 state 或该 domain 规则，且 agent 必须保持可服务状态；若 agent 卸载失败，必须恢复删除前的规则文件并返回错误。
 
 ## 4. 返回码规范
 - `0`: 成功。
 - `2`: 参数错误或输入非法。
 - `3`: 依赖缺失（如 `cpulimit` 不存在）。
-- `4`: 权限不足（如系统域无权限）。
+- `4`: 权限不足（如系统域无权限，或 system-domain `launchctl` 返回授权/权限失败）。
 - `5`: 系统调用失败（launchd / 进程查询失败）。
 - `6`: 状态冲突（外部 ad-hoc 冲突、实例不存在、规则重复但未允许覆盖等）。
 

@@ -4,8 +4,8 @@
 它不重写 `cpulimit` 算法，而是在其上构建：规则管理、进程选择、`launchd` 托管、实例状态追踪与安全清理。
 
 ## 设计目标
-- 默认低权限运行：默认使用 `launchd` 用户域（`LaunchAgents`）。
-- 明确权限边界：目标进程归 `root` 或系统服务账号所有时，必须使用 `--domain system` 的系统域 agent 才能实际限速。
+- 默认面向系统后台进程：默认使用 `launchd` 系统域（`LaunchDaemons`），适合限制 `root` 或系统服务账号拥有的安全、审计、VPN、EDR、设备管理类后台进程。
+- 明确权限边界：系统域操作通常需要 `sudo`；需要限制当前用户拥有的普通应用时，显式使用 `--domain user`。
 - 零误杀清理：`clean` 仅处理本工具托管实例。
 - 低常驻开销：`top/status` 单次采样，不重复全表扫描。
 - 文档先行：行为和接口以 `docs/` 为准。
@@ -34,7 +34,7 @@
 - `clean [--yes]`：清理本工具托管实例与本地状态。
 - `install-agent`：安装/刷新单一 `com.cpuguard.agent`。
 - 无子命令：展示只读 dashboard，包括规则、agent 状态和当前被限制的进程。
-- 全局参数：`--domain user|system`（默认 `user`）。
+- 全局参数：`--domain user|system`（默认 `system`）。
 
 `watch` 启动前会执行冲突检测：
 - 若存在本工具托管的一次性实例（ad-hoc）命中同名目标，则先停止再启动 watch。
@@ -42,8 +42,10 @@
 
 关于自动化托管行为：
 - `launchd` 只托管一个 `com.cpuguard.agent`，规则只是配置数据，不为每条规则创建独立开机启动项。
+- 默认配置目录按 domain 分离：`system` 使用 `/Library/Application Support/cpuguard`，`user` 使用 `~/.config/cpuguard`。
 - agent 低频共享一次进程快照评估全部规则；只有目标 PID CPU 连续超过 `trigger_cpu` 时才启动 `cpulimit -p <pid>`。
 - 目标退出、规则删除，或 CPU 连续低于 `release_cpu` 后，agent 停止并清理对应托管实例。
+- watch 规则的 `limit` 更新后，agent 会替换仍在运行的旧限速实例，避免旧 `cpulimit -l` 参数继续生效。
 - agent 内置 backoff 和实例上限，避免限速管理本身造成额外性能消耗。
 
 ## 依赖
@@ -138,23 +140,24 @@ cpuguard --help
 ./target/release/cpuguard clean --yes
 ```
 
-### 5) 域切换（默认 user）
+### 5) 域切换（默认 system）
 ```bash
-# 用户域（默认）
-./target/release/cpuguard --domain user watches
+# 系统域（默认，写入 LaunchDaemons 通常需要 sudo）
+sudo /usr/local/bin/cpuguard watches
+sudo /usr/local/bin/cpuguard watch myproc --limit 20
 
-# 系统域（通常需要更高权限）
-./target/release/cpuguard --domain system watch myproc --limit 20
+# 用户域（限制当前用户拥有的普通应用时显式指定）
+./target/release/cpuguard --domain user watches
 ```
 
-用户域适合限制当前用户拥有的应用进程，例如普通开发工具、浏览器子进程或手动启动的任务。系统域适合限制 `root` 拥有的安全、审计、VPN、EDR、设备管理类后台进程；这类进程在用户域里可能显示规则已加载，但 `status` 没有 running 实例，或 `cpulimit` 返回权限不足。
+系统域适合限制 `root` 拥有的安全、审计、VPN、EDR、设备管理类后台进程。用户域适合限制当前用户拥有的应用进程，例如普通开发工具、浏览器子进程或手动启动的任务；用户域必须显式传入 `--domain user`。
 
 系统域安装示例：
 ```bash
 sudo install -m 755 ./target/release/cpuguard /usr/local/bin/cpuguard
-sudo /usr/local/bin/cpuguard --domain system watch <name> --limit 20 --trigger-cpu 15 --release-cpu 6
-sudo /usr/local/bin/cpuguard --domain system install-agent
-sudo /usr/local/bin/cpuguard --domain system status
+sudo /usr/local/bin/cpuguard watch <name> --limit 20 --trigger-cpu 15 --release-cpu 6
+sudo /usr/local/bin/cpuguard install-agent
+sudo /usr/local/bin/cpuguard status
 ```
 
 启用系统域后，通常应停掉不再需要的用户域 agent，避免重复扫描：

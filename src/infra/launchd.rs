@@ -24,6 +24,7 @@ pub trait LaunchdManager {
 pub struct RealLaunchdManager {
     pub label_prefix: String,
     pub launch_agents_dir: PathBuf,
+    pub launch_daemons_dir: PathBuf,
 }
 
 impl RealLaunchdManager {
@@ -36,17 +37,16 @@ impl RealLaunchdManager {
             Domain::User => self
                 .launch_agents_dir
                 .join(format!("{}.plist", self.agent_label())),
-            Domain::System => PathBuf::from(format!(
-                "/Library/LaunchDaemons/{}.plist",
-                self.agent_label()
-            )),
+            Domain::System => self
+                .launch_daemons_dir
+                .join(format!("{}.plist", self.agent_label())),
         }
     }
 
     fn domain_plist_dir(&self, domain: Domain) -> PathBuf {
         match domain {
             Domain::User => self.launch_agents_dir.clone(),
-            Domain::System => PathBuf::from("/Library/LaunchDaemons"),
+            Domain::System => self.launch_daemons_dir.clone(),
         }
     }
 
@@ -65,11 +65,15 @@ impl RealLaunchdManager {
                 cmd.args(["bootout", &format!("system/{label}")]);
             }
         }
-        let status = cmd
-            .status()
+        let output = cmd
+            .output()
             .context("launchctl bootout failed to execute")?;
-        if !status.success() {
-            return Err(anyhow!("launchctl bootout failed for {label}"));
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(anyhow!(
+                "launchctl bootout failed for {label}: {}",
+                stderr.trim()
+            ));
         }
         Ok(())
     }
@@ -156,11 +160,12 @@ impl RealLaunchdManager {
                 cmd.args(["bootstrap", "system", plist.to_string_lossy().as_ref()]);
             }
         }
-        let status = cmd
-            .status()
+        let output = cmd
+            .output()
             .context("launchctl bootstrap failed to execute")?;
-        if !status.success() {
-            return Err(anyhow!("launchctl bootstrap failed"));
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(anyhow!("launchctl bootstrap failed: {}", stderr.trim()));
         }
         Ok(())
     }
@@ -320,6 +325,7 @@ mod tests {
         let manager = RealLaunchdManager {
             label_prefix: "com.cpuguard".to_string(),
             launch_agents_dir: dir.path().to_path_buf(),
+            launch_daemons_dir: dir.path().to_path_buf(),
         };
         let plist = dir.path().join("demo.plist");
 
@@ -350,6 +356,7 @@ mod tests {
         let manager = RealLaunchdManager {
             label_prefix: "com.cpuguard".to_string(),
             launch_agents_dir: dir.path().to_path_buf(),
+            launch_daemons_dir: dir.path().to_path_buf(),
         };
         let managed = dir.path().join("managed.plist");
         let external = dir.path().join("external.plist");
@@ -377,6 +384,7 @@ mod tests {
         let manager = RealLaunchdManager {
             label_prefix: "com.cpuguard".to_string(),
             launch_agents_dir: dir.path().to_path_buf(),
+            launch_daemons_dir: dir.path().to_path_buf(),
         };
         let agent = dir.path().join("com.cpuguard.agent.plist");
         let legacy = dir.path().join("com.cpuguard.legacy.plist");

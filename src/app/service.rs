@@ -606,12 +606,15 @@ mod tests {
         }
         crate::store::add_watch_instance(
             &state_file,
-            3333,
-            std::process::id(),
-            "demo-proc",
-            30.0,
-            Domain::User,
-            "com.cpuguard.agent",
+            crate::store::WatchInstanceUpdate {
+                cpulimit_pid: 3333,
+                target_pid: std::process::id(),
+                rule_name: "demo-proc",
+                limit: 20,
+                last_observed_cpu: 30.0,
+                domain: Domain::User,
+                owner_label: "com.cpuguard.agent",
+            },
         )
         .expect("watch instance");
 
@@ -655,12 +658,15 @@ mod tests {
         .expect("rule");
         crate::store::add_watch_instance(
             &state_file,
-            3333,
-            std::process::id(),
-            "demo-proc",
-            30.0,
-            Domain::User,
-            "com.cpuguard.agent",
+            crate::store::WatchInstanceUpdate {
+                cpulimit_pid: 3333,
+                target_pid: std::process::id(),
+                rule_name: "demo-proc",
+                limit: 20,
+                last_observed_cpu: 30.0,
+                domain: Domain::User,
+                owner_label: "com.cpuguard.agent",
+            },
         )
         .expect("watch instance");
 
@@ -740,6 +746,7 @@ mod tests {
                     cpulimit_pid: 3333,
                     target: ManagedTarget::Pid(self_pid),
                     rule_name: None,
+                    limit: Some(20),
                     last_observed_cpu: Some(30.0),
                     domain: Domain::User,
                     started_at: Local::now(),

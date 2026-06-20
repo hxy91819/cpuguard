@@ -1,4 +1,4 @@
-use anyhow::{Result, bail};
+use anyhow::{Error, Result, bail};
 use clap::{Parser, Subcommand};
 use std::collections::HashSet;
 use std::io::Write;
@@ -26,7 +26,7 @@ const RISK_ELAPSED_THRESHOLD_SECS: u64 = 1800;
 #[derive(Parser, Debug)]
 #[command(version, about = "cpuguard: macOS cpulimit manager")]
 struct Cli {
-    #[arg(long, default_value = "user")]
+    #[arg(long, default_value = "system")]
     domain: DomainArg,
 
     #[command(subcommand)]
@@ -103,14 +103,54 @@ impl From<DomainArg> for Domain {
     }
 }
 
-fn main() -> Result<()> {
+fn main() {
     let cli = Cli::parse();
-    run(cli)
+    let domain: Domain = cli.domain.clone().into();
+    if let Err(err) = run(cli) {
+        let code = exit_code_for_error(&err, domain);
+        eprintln!("{}", user_error_message(&err, code, domain));
+        std::process::exit(code);
+    }
+}
+
+fn exit_code_for_error(err: &Error, domain: Domain) -> i32 {
+    if domain == Domain::System && is_permission_denied(err) {
+        return 4;
+    }
+    1
+}
+
+fn user_error_message(err: &Error, code: i32, domain: Domain) -> String {
+    if code == 4 && domain == Domain::System {
+        return "permission denied for system domain. Retry with sudo or use --domain user"
+            .to_string();
+    }
+    format!("{err:#}")
+}
+
+fn is_permission_denied(err: &Error) -> bool {
+    err.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|io| io.kind() == std::io::ErrorKind::PermissionDenied)
+            || launchctl_permission_denied(cause.to_string().as_str())
+    })
+}
+
+fn launchctl_permission_denied(message: &str) -> bool {
+    let message = message.to_ascii_lowercase();
+    message.contains("launchctl")
+        && (message.contains("permission denied")
+            || message.contains("operation not permitted")
+            || message.contains("not privileged")
+            || message.contains("authorization")
+            || message.contains("re-running the command as root")
+            || message.contains("rerunning the command as root"))
 }
 
 fn run(cli: Cli) -> Result<()> {
-    let config = AppConfig::load();
     let domain: Domain = cli.domain.into();
+    let config = AppConfig::load(domain);
 
     let service = Service {
         executor: RealCpulimitExecutor {
@@ -119,6 +159,7 @@ fn run(cli: Cli) -> Result<()> {
         launchd: RealLaunchdManager {
             label_prefix: config.label_prefix.clone(),
             launch_agents_dir: config.launch_agents_dir.clone(),
+            launch_daemons_dir: config.launch_daemons_dir.clone(),
         },
     };
 
@@ -927,6 +968,7 @@ mod tests {
                     cpulimit_pid: self_pid,
                     target: ManagedTarget::Pid(101),
                     rule_name: Some("demo".to_string()),
+                    limit: Some(20),
                     last_observed_cpu: Some(80.0),
                     domain: Domain::User,
                     started_at: chrono::Local::now(),
@@ -938,6 +980,7 @@ mod tests {
                     cpulimit_pid: self_pid,
                     target: ManagedTarget::Pid(102),
                     rule_name: None,
+                    limit: None,
                     last_observed_cpu: None,
                     domain: Domain::User,
                     started_at: chrono::Local::now(),
@@ -949,6 +992,7 @@ mod tests {
                     cpulimit_pid: u32::MAX,
                     target: ManagedTarget::Pid(103),
                     rule_name: Some("demo".to_string()),
+                    limit: Some(20),
                     last_observed_cpu: Some(80.0),
                     domain: Domain::User,
                     started_at: chrono::Local::now(),
@@ -961,5 +1005,57 @@ mod tests {
         assert!(pids.contains(&101));
         assert!(pids.contains(&102));
         assert!(!pids.contains(&103));
+    }
+
+    #[test]
+    fn cli_default_domain_is_system() {
+        let cli = Cli::parse_from(["cpuguard"]);
+        let domain: Domain = cli.domain.into();
+        assert_eq!(domain, Domain::System);
+    }
+
+    #[test]
+    fn permission_denied_errors_use_permission_exit_code_and_guidance() {
+        let err = anyhow::Error::new(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "denied",
+        ))
+        .context("write system config");
+
+        assert_eq!(exit_code_for_error(&err, Domain::System), 4);
+        assert_eq!(
+            user_error_message(&err, 4, Domain::System),
+            "permission denied for system domain. Retry with sudo or use --domain user"
+        );
+    }
+
+    #[test]
+    fn user_domain_permission_errors_keep_original_message() {
+        let err = anyhow::Error::new(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "denied",
+        ))
+        .context("read user config");
+
+        assert_eq!(exit_code_for_error(&err, Domain::User), 1);
+        assert!(user_error_message(&err, 1, Domain::User).contains("read user config"));
+    }
+
+    #[test]
+    fn system_launchctl_authorization_errors_use_permission_exit_code() {
+        let err = anyhow::anyhow!(
+            "launchctl bootstrap failed: Bootstrap failed: 5: Input/output error. Try re-running the command as root for richer errors."
+        )
+        .context("refresh launchd agent com.cpuguard.agent");
+
+        assert_eq!(exit_code_for_error(&err, Domain::System), 4);
+    }
+
+    #[test]
+    fn system_launchctl_non_permission_errors_keep_generic_exit_code() {
+        let err = anyhow::anyhow!("launchctl bootstrap failed: Invalid property list")
+            .context("refresh launchd agent com.cpuguard.agent");
+
+        assert_eq!(exit_code_for_error(&err, Domain::System), 1);
     }
 }

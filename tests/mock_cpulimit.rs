@@ -64,10 +64,10 @@ fn top_once_uses_mock_cpulimit_and_records_state() {
 fn top_default_creates_watch_rule() {
     let dir = tempdir().expect("tempdir");
     let cfg_dir = dir.path().join("cfg");
-    let agents_dir = dir.path().join("agents");
+    let daemons_dir = dir.path().join("daemons");
     let mock_bin = dir.path().join("cpulimit-mock.sh");
     fs::create_dir_all(&cfg_dir).expect("create cfg dir");
-    fs::create_dir_all(&agents_dir).expect("create agents dir");
+    fs::create_dir_all(&daemons_dir).expect("create daemons dir");
     fs::write(
         &mock_bin,
         "#!/bin/sh\nif [ \"$1\" = \"--help\" ]; then\n  echo \"Usage: cpulimit [OPTIONS...] TARGET\"\n  exit 1\nfi\nexit 0\n",
@@ -89,7 +89,7 @@ fn top_default_creates_watch_rule() {
         .env("CPULIMIT_TOP_CONFIG_DIR", &cfg_dir)
         .env("CPULIMIT_TOP_CPULIMIT_BIN", &mock_bin)
         .env("CPULIMIT_TOP_DISABLE_LAUNCHD", "1")
-        .env("CPULIMIT_TOP_LAUNCH_AGENTS_DIR", &agents_dir)
+        .env("CPULIMIT_TOP_LAUNCH_DAEMONS_DIR", &daemons_dir)
         .output()
         .expect("run binary");
 
@@ -103,7 +103,7 @@ fn top_default_creates_watch_rule() {
     assert!(rules_text.contains("trigger_cpu = 25.0"));
     assert!(rules_text.contains("release_cpu = 8.0"));
     let agent_plist =
-        fs::read_to_string(agents_dir.join("com.cpuguard.agent.plist")).expect("read agent plist");
+        fs::read_to_string(daemons_dir.join("com.cpuguard.agent.plist")).expect("read agent plist");
     assert!(agent_plist.contains("__agent"));
     assert!(agent_plist.contains("--config-dir"));
     assert!(!agent_plist.contains("__watch-runner"));
@@ -115,10 +115,10 @@ fn top_default_creates_watch_rule() {
 fn watch_writes_thresholds_and_single_agent_plist() {
     let dir = tempdir().expect("tempdir");
     let cfg_dir = dir.path().join("cfg");
-    let agents_dir = dir.path().join("agents");
+    let daemons_dir = dir.path().join("daemons");
     let mock_bin = dir.path().join("cpulimit-mock.sh");
     fs::create_dir_all(&cfg_dir).expect("create cfg dir");
-    fs::create_dir_all(&agents_dir).expect("create agents dir");
+    fs::create_dir_all(&daemons_dir).expect("create daemons dir");
     fs::write(
         &mock_bin,
         "#!/bin/sh\nif [ \"$1\" = \"--help\" ]; then\n  echo \"Usage: cpulimit [OPTIONS...] TARGET\"\n  exit 1\nfi\nexit 0\n",
@@ -145,7 +145,7 @@ fn watch_writes_thresholds_and_single_agent_plist() {
         .env("CPULIMIT_TOP_CONFIG_DIR", &cfg_dir)
         .env("CPULIMIT_TOP_CPULIMIT_BIN", &mock_bin)
         .env("CPULIMIT_TOP_DISABLE_LAUNCHD", "1")
-        .env("CPULIMIT_TOP_LAUNCH_AGENTS_DIR", &agents_dir)
+        .env("CPULIMIT_TOP_LAUNCH_DAEMONS_DIR", &daemons_dir)
         .output()
         .expect("run binary");
 
@@ -160,8 +160,8 @@ fn watch_writes_thresholds_and_single_agent_plist() {
     assert!(rules_text.contains("release_cpu = 6.0"));
     assert!(rules_text.contains("args_contains = \"NGNAuditXPCClient\""));
 
-    let entries = fs::read_dir(&agents_dir)
-        .expect("read agents dir")
+    let entries = fs::read_dir(&daemons_dir)
+        .expect("read daemons dir")
         .map(|entry| {
             entry
                 .expect("entry")
@@ -186,7 +186,7 @@ version = 1
 [[rules]]
 name = "definitely_not_running_proc_123"
 limit = 21
-domain = "user"
+domain = "system"
 created_at = "2026-03-05T11:00:00+08:00"
 updated_at = "2026-03-05T11:00:00+08:00"
 "#,
@@ -306,10 +306,10 @@ fn status_shows_table_and_running_state() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("CPULIMIT"));
     assert!(stdout.contains("DOMAIN"));
-    assert!(stdout.contains("ins_test"));
-    assert!(stdout.contains("user"));
+    assert!(stdout.contains("ins_system"));
+    assert!(stdout.contains("system"));
     assert!(stdout.contains("running"));
-    assert!(!stdout.contains("ins_system"));
+    assert!(!stdout.contains("ins_test"));
 }
 
 #[test]
@@ -328,7 +328,7 @@ name = "cpuguard_dash_rule"
 limit = 20
 trigger_cpu = 15.0
 release_cpu = 6.0
-domain = "user"
+domain = "system"
 created_at = "2026-03-05T11:00:00+08:00"
 updated_at = "2026-03-05T11:00:00+08:00"
 "#,
@@ -347,7 +347,7 @@ updated_at = "2026-03-05T11:00:00+08:00"
       "target": {{ "kind": "pid", "value": {self_pid} }},
       "rule_name": "cpuguard_dash_rule",
       "last_observed_cpu": 18.5,
-      "domain": "user",
+      "domain": "system",
       "started_at": "2026-03-05T11:00:00+08:00",
       "owner_label": "com.cpuguard.agent"
     }}
@@ -394,7 +394,7 @@ version = 1
 [[rules]]
 name = "definitely_not_running_proc_123"
 limit = 21
-domain = "user"
+domain = "system"
 created_at = "2026-03-05T11:00:00+08:00"
 updated_at = "2026-03-05T11:00:00+08:00"
 "#,

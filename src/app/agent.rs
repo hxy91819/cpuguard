@@ -140,6 +140,18 @@ impl<E: CpulimitExecutor> Agent<'_, E> {
             }
 
             let entry = target_entry.expect("checked above");
+            let Some(rule) = matching_rule else {
+                continue;
+            };
+            if !watch_instance_limit_matches_rule(instance, rule) {
+                if self.executor.stop_instance(instance.cpulimit_pid).is_err() {
+                    continue;
+                }
+                let _ = store::remove_instance_by_pid(self.state_file, instance.cpulimit_pid);
+                active_watch_count = active_watch_count.saturating_sub(1);
+                limited_targets.remove(&target_pid);
+                continue;
+            }
             if let Err(err) = stop_duplicate_cpulimits_for_target(
                 self.executor,
                 cpulimit_pids_by_target
@@ -153,9 +165,6 @@ impl<E: CpulimitExecutor> Agent<'_, E> {
                 continue;
             }
             let _ = store::update_instance_cpu(self.state_file, instance.cpulimit_pid, entry.cpu);
-            let Some(rule) = matching_rule else {
-                continue;
-            };
             if !rule_matches(rule, entry, &mut args_cache) {
                 if self.executor.stop_instance(instance.cpulimit_pid).is_err() {
                     continue;
@@ -224,12 +233,15 @@ impl<E: CpulimitExecutor> Agent<'_, E> {
                 };
                 if store::add_watch_instance(
                     self.state_file,
-                    cpulimit_pid,
-                    entry.pid,
-                    &rule.name,
-                    entry.cpu,
-                    self.domain,
-                    AGENT_LABEL,
+                    store::WatchInstanceUpdate {
+                        cpulimit_pid,
+                        target_pid: entry.pid,
+                        rule_name: &rule.name,
+                        limit: rule.limit,
+                        last_observed_cpu: entry.cpu,
+                        domain: self.domain,
+                        owner_label: AGENT_LABEL,
+                    },
                 )
                 .is_err()
                 {
@@ -349,6 +361,36 @@ fn watch_instance_matches_rule(
         Some(name) => name == rule.name,
         None => target_entry.is_some_and(|entry| rule_matches(rule, entry, args_cache)),
     }
+}
+
+fn watch_instance_limit_matches_rule(
+    instance: &crate::model::ManagedInstance,
+    rule: &Rule,
+) -> bool {
+    let observed_limit = instance
+        .limit
+        .or_else(|| cpulimit_limit(instance.cpulimit_pid).ok().flatten());
+    observed_limit.is_none_or(|limit| limit == rule.limit)
+}
+
+fn cpulimit_limit(cpulimit_pid: u32) -> Result<Option<u16>> {
+    Ok(process_args(cpulimit_pid)?.and_then(|args| parse_cpulimit_limit_from_args(&args)))
+}
+
+fn parse_cpulimit_limit_from_args(args: &str) -> Option<u16> {
+    let mut parts = args.split_whitespace();
+    while let Some(part) = parts.next() {
+        if part == "-l" {
+            return parts.next().and_then(|value| value.parse::<u16>().ok());
+        }
+        if let Some(value) = part.strip_prefix("-l")
+            && !value.is_empty()
+            && let Ok(limit) = value.parse::<u16>()
+        {
+            return Some(limit);
+        }
+    }
+    None
 }
 
 fn rule_matches(
@@ -510,12 +552,15 @@ mod tests {
         let rules_file = PathBuf::from(dir.path()).join("rules.toml");
         store::add_watch_instance(
             &state_file,
-            std::process::id(),
-            100,
-            "ztsmedr",
-            30.0,
-            Domain::User,
-            AGENT_LABEL,
+            store::WatchInstanceUpdate {
+                cpulimit_pid: std::process::id(),
+                target_pid: 100,
+                rule_name: "ztsmedr",
+                limit: 20,
+                last_observed_cpu: 30.0,
+                domain: Domain::User,
+                owner_label: AGENT_LABEL,
+            },
         )
         .expect("watch instance");
         let executor = FakeExecutor::default();
@@ -550,12 +595,15 @@ mod tests {
         let cpulimit_pid = std::process::id();
         store::add_watch_instance(
             &state_file,
-            cpulimit_pid,
-            100,
-            "ztsmedr",
-            30.0,
-            Domain::User,
-            AGENT_LABEL,
+            store::WatchInstanceUpdate {
+                cpulimit_pid,
+                target_pid: 100,
+                rule_name: "ztsmedr",
+                limit: 20,
+                last_observed_cpu: 30.0,
+                domain: Domain::User,
+                owner_label: AGENT_LABEL,
+            },
         )
         .expect("watch instance");
         let executor = FakeExecutor::default();
@@ -617,12 +665,15 @@ mod tests {
         let rules_file = PathBuf::from(dir.path()).join("rules.toml");
         store::add_watch_instance(
             &state_file,
-            std::process::id(),
-            100,
-            "ztsmedr",
-            30.0,
-            Domain::System,
-            AGENT_LABEL,
+            store::WatchInstanceUpdate {
+                cpulimit_pid: std::process::id(),
+                target_pid: 100,
+                rule_name: "ztsmedr",
+                limit: 20,
+                last_observed_cpu: 30.0,
+                domain: Domain::System,
+                owner_label: AGENT_LABEL,
+            },
         )
         .expect("watch instance");
         let executor = FakeExecutor::default();
@@ -658,6 +709,7 @@ mod tests {
                     cpulimit_pid: std::process::id(),
                     target: ManagedTarget::Pid(100),
                     rule_name: None,
+                    limit: Some(20),
                     last_observed_cpu: Some(30.0),
                     domain: Domain::User,
                     started_at: Local::now(),
@@ -738,12 +790,15 @@ mod tests {
         let rules_file = PathBuf::from(dir.path()).join("rules.toml");
         store::add_watch_instance(
             &state_file,
-            std::process::id(),
-            100,
-            "iOABiz",
-            30.0,
-            Domain::User,
-            AGENT_LABEL,
+            store::WatchInstanceUpdate {
+                cpulimit_pid: std::process::id(),
+                target_pid: 100,
+                rule_name: "iOABiz",
+                limit: 20,
+                last_observed_cpu: 30.0,
+                domain: Domain::User,
+                owner_label: AGENT_LABEL,
+            },
         )
         .expect("watch instance");
         let executor = FakeExecutor::default();
@@ -770,6 +825,48 @@ mod tests {
     }
 
     #[test]
+    fn existing_instance_is_stopped_when_rule_limit_changes() {
+        let dir = tempdir().expect("tempdir");
+        let state_file = PathBuf::from(dir.path()).join("state.json");
+        let rules_file = PathBuf::from(dir.path()).join("rules.toml");
+        let cpulimit_pid = std::process::id();
+        store::add_watch_instance(
+            &state_file,
+            store::WatchInstanceUpdate {
+                cpulimit_pid,
+                target_pid: 100,
+                rule_name: "ztsmedr",
+                limit: 20,
+                last_observed_cpu: 30.0,
+                domain: Domain::User,
+                owner_label: AGENT_LABEL,
+            },
+        )
+        .expect("watch instance");
+        let executor = FakeExecutor::default();
+        let agent = Agent {
+            executor: &executor,
+            rules_file: &rules_file,
+            state_file: &state_file,
+            domain: Domain::User,
+        };
+        let mut updated_rule = rule("ztsmedr");
+        updated_rule.limit = 10;
+
+        agent
+            .tick_with_snapshot(
+                &mut AgentRuntime::new(),
+                &[updated_rule],
+                &[entry(100, "ztsmedr", 80.0)],
+            )
+            .expect("tick");
+
+        assert_eq!(*executor.stopped.borrow(), vec![cpulimit_pid]);
+        let state = store::load_state(&state_file).expect("state");
+        assert!(state.instances.is_empty());
+    }
+
+    #[test]
     fn parses_cpulimit_targets_from_ps_output() {
         let ps_output = r#"
 13178 /opt/homebrew/bin/cpulimit -p 21495 -l 20 -i
@@ -780,6 +877,22 @@ mod tests {
 
         let matches = cpulimit_pids_for_target_from_ps(ps_output, 21243);
         assert_eq!(matches, vec![21878, 38719]);
+    }
+
+    #[test]
+    fn parses_cpulimit_limit_from_args() {
+        assert_eq!(
+            parse_cpulimit_limit_from_args("/opt/homebrew/bin/cpulimit -p 21495 -l 20 -i"),
+            Some(20)
+        );
+        assert_eq!(
+            parse_cpulimit_limit_from_args("/opt/homebrew/bin/cpulimit -p 21495 -l10 -i"),
+            Some(10)
+        );
+        assert_eq!(
+            parse_cpulimit_limit_from_args("/bin/zsh -lc cpulimit"),
+            None
+        );
     }
 
     #[test]

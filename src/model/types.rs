@@ -72,6 +72,8 @@ pub struct ManagedInstance {
     #[serde(default)]
     pub rule_name: Option<String>,
     #[serde(default)]
+    pub limit: Option<u16>,
+    #[serde(default)]
     pub last_observed_cpu: Option<f32>,
     pub domain: Domain,
     pub started_at: DateTime<Local>,
